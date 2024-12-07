@@ -1,0 +1,147 @@
+{
+  "shifts": [
+    {
+      "date": "2024-01-22",
+      "time": "7:30-14:30",
+      "staff": ["staff1", "staff2", "staff3", "staff4", "staff5"]
+    },
+    {
+      "date": "2024-01-22",
+      "time": "14:30-21:30",
+      "staff": ["staff6", "staff7", "staff8", "staff9"]
+    },
+    {
+      "date": "2024-01-22",
+      "time": "21:30-7:30",
+      "staff": ["staff10", "staff11"]
+    },
+    {
+      "date": "2024-01-23",
+      "time": "7:30-14:30",
+      "staff": ["staff3", "staff4", "staff5", "staff12", "staff13"]
+    },
+    {
+      "date": "2024-01-23",
+      "time": "14:30-21:30",
+      "staff": ["staff1", "staff2", "staff14", "staff15"]
+    },
+    {
+      "date": "2024-01-23",
+      "time": "21:30-7:30",
+      "staff": ["staff16", "staff17"]
+    },
+    {
+      "date": "2024-01-24",
+      "time": "7:30-14:30",
+      "staff": ["staff6", "staff7", "staff8", "staff18", "staff19"]
+    },
+    {
+      "date": "2024-01-24",
+      "time": "14:30-21:30",
+      "staff": ["staff9", "staff10", "staff11", "staff20"]
+    },
+    {
+      "date": "2024-01-24",
+      "time": "21:30-7:30",
+      "staff": ["staff12", "staff13"]
+    },
+    {
+      "date": "2024-01-25",
+      "time": "7:30-14:30",
+      "staff": ["staff14", "staff15", "staff16", "staff17", "staff21"]
+    },
+    {
+      "date": "2024-01-25",
+      "time": "14:30-21:30",
+      "staff": ["staff18", "staff19", "staff20", "staff22"]
+    },
+    {
+      "date": "2024-01-25",
+      "time": "21:30-7:30",
+      "staff": ["staff1", "staff2"]
+    },
+    {
+      "date": "2024-01-26",
+      "time": "7:30-14:30",
+      "staff": ["staff3", "staff4", "staff5", "staff23", "staff24"]
+    },
+    {
+      "date": "2024-01-26",
+      "time": "14:30-21:30",
+      "staff": ["staff6", "staff7", "staff8", "staff25"]
+    },
+    {
+      "date": "2024-01-26",
+      "time": "21:30-7:30",
+      "staff": ["staff9", "staff10"]
+    },
+    {
+      "date": "2024-01-27",
+      "time": "7:30-14:30",
+      "staff": ["staff11", "staff12", "staff13", "staff26", "staff27"]
+    },
+    {
+      "date": "2024-01-27",
+      "time": "14:30-21:30",
+      "staff": ["staff14", "staff15", "staff16", "staff28"]
+    },
+    {
+      "date": "2024-01-27",
+      "time": "21:30-7:30",
+      "staff": ["staff17", "staff18"]
+    },
+    {
+      "date": "2024-01-28",
+      "time": "7:30-14:30",
+      "staff": ["staff19", "staff20", "staff21", "staff29", "staff30"]
+    },
+    {
+      "date": "2024-01-28",
+      "time": "14:30-21:30",
+      "staff": ["staff22", "staff23", "staff24", "staff1"]
+    },
+    {
+      "date": "2024-01-28",
+      "time": "21:30-7:30",
+      "staff": ["staff25", "staff26"]
+    }
+  ],
+  "staff": [
+    {
+      "id": "staff1",
+      "name": "John Smith",
+      "roles": ["Shift Leader"],
+      "contractedHours": 37.5,
+      "preferences": {
+        "preferredShifts": ["7:30-14:30", "14:30-21:30"],
+        "unavailableDates": [],
+        "flexibleHours": true,
+        "nightShiftOnly": false
+      }
+    },
+    {
+      "id": "staff2",
+      "name": "Sarah Johnson",
+      "roles": ["Care Staff"],
+      "contractedHours": 37.5,
+      "preferences": {
+        "preferredShifts": ["7:30-14:30"],
+        "unavailableDates": [],
+        "flexibleHours": false,
+        "nightShiftOnly": false
+      }
+    },
+    {
+      "id": "staff3",
+      "name": "Michael Brown",
+      "roles": ["Driver", "Care Staff"],
+      "contractedHours": 37.5,
+      "preferences": {
+        "preferredShifts": ["7:30-14:30", "14:30-21:30"],
+        "unavailableDates": [],
+        "flexibleHours": true,
+        "nightShiftOnly": false
+      }
+    }
+  ]
+}

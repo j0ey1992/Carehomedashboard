@@ -1,0 +1,68 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    function isValidContentType() {
+      return request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') ||
+             request.resource.contentType.matches('application/vnd.ms-excel');
+    }
+    
+    function isValidFileSize() {
+      return request.resource.size <= 5 * 1024 * 1024; // 5MB max
+    }
+
+    // Training data uploads
+    match /training/{userId}/{fileName} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() && 
+                      isValidContentType() && 
+                      isValidFileSize();
+      allow delete: if isAdmin();
+    }
+
+    // User documents (e.g., profile pictures, certificates)
+    match /users/{userId}/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if request.auth.uid == userId || isAdmin();
+    }
+
+    // DoLS documents
+    match /dols/{dolsId}/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Supervision documents
+    match /supervisions/{supervisionId}/{fileName} {
+      allow read: if isAuthenticated() && (
+        firestore.get(/databases/(default)/documents/supervisions/$(supervisionId)).data.staffId == request.auth.uid ||
+        firestore.get(/databases/(default)/documents/supervisions/$(supervisionId)).data.supervisorId == request.auth.uid ||
+        isAdmin()
+      );
+      allow write: if isAdmin();
+    }
+
+    // System files (e.g., templates, guides)
+    match /system/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Temporary uploads (e.g., for processing)
+    match /temp/{userId}/{fileName} {
+      allow read: if request.auth.uid == userId || isAdmin();
+      allow create: if request.auth.uid == userId && 
+                      isValidFileSize();
+      allow delete: if request.auth.uid == userId || isAdmin();
+    }
+  }
+}
