@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   Box,
   Grid,
@@ -6,176 +6,151 @@ import {
   Typography,
   LinearProgress,
   Fade,
+  Zoom,
   List,
   ListItem,
-  ListItemText,
   ListItemIcon,
-  Button,
-  Link,
+  ListItemText,
   Chip,
-  Alert,
+  Card,
+  CardContent,
+  Button,
+  Stack,
   Divider,
+  Tooltip,
+  Switch,
+  IconButton,
+  Alert,
 } from '@mui/material';
+import {
+  Warning as WarningIcon,
+  CheckCircle as CheckCircleIcon,
+  LocalHospital as SickIcon,
+  Event as EventIcon,
+  School as TrainingIcon,
+  Pending as PendingIcon,
+  EventAvailable as LeaveIcon,
+  HelpOutline as HelpIcon,
+  PlayCircleOutline as QuickActionIcon,
+  Celebration as CelebrationIcon,
+  Assignment as TaskIcon,
+  Assessment as ReportIcon,
+  Group as StaffIcon,
+  AccountBalance as ComplianceIcon,
+  Forum as CommunicationIcon,
+  ArrowForward as ArrowIcon,
+  FilterList as FilterIcon,
+  Work as WorkIcon,
+} from '@mui/icons-material';
 import { alpha, useTheme } from '@mui/material/styles';
+import { format, isAfter, isBefore, startOfDay, addDays, parseISO } from 'date-fns';
+import { useNavigate, Link as RouterLink } from 'react-router-dom';
+
 import { useAuth } from '../../contexts/AuthContext';
 import { useTraining } from '../../contexts/TrainingContext';
 import { useTask } from '../../contexts/TaskContext';
 import { useSupervision } from '../../contexts/SupervisionContext';
 import { useCompliance } from '../../contexts/ComplianceContext';
-import { useLeaderboard } from '../../contexts/LeaderboardContext';
+import { useUsers } from '../../contexts/UserContext';
 import { useSickness } from '../../contexts/SicknessContext';
 import { useLeave } from '../../contexts/LeaveContext';
-import { format, isAfter, isBefore, startOfDay, addDays, parseISO } from 'date-fns';
+import { useGamification } from '../../contexts/GamificationContext';
+import LeaderboardSection from '../Dashboard/LeaderboardSection';
+
 import { F2F_COURSES, TRAINING_COURSES } from '../../utils/courseConstants';
-import AttendanceSection from './AttendanceSection';
-import SupervisionFeedbackSection from './SupervisionFeedbackSection';
-import LeaderboardSection from './LeaderboardSection';
-import { addDoc, collection, Timestamp } from 'firebase/firestore';
-import { db } from '../../firebase/config';
-import { SupervisionFeedback } from '../../types';
-import AssignmentIcon from '@mui/icons-material/Assignment';
-import EventIcon from '@mui/icons-material/Event';
-import WarningIcon from '@mui/icons-material/Warning';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import PendingIcon from '@mui/icons-material/Pending';
-import WorkIcon from '@mui/icons-material/Work';
-import { LocalHospital as SickIcon } from '@mui/icons-material';
-import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import { Link as RouterLink } from 'react-router-dom';
-import { ShiftRole } from '../../types/rota';
-import { EventAvailable as LeaveIcon } from '@mui/icons-material';
-import { LeaveRequest } from '../../types/leave';
 
-interface SicknessRecord {
-  id: string;
-  staffId: string;
-  staffName: string;
-  startDate: Date | Timestamp;
-  endDate?: Date | Timestamp | null;
-  reason: string;
-  notes?: string;
-  status: 'current' | 'completed' | 'review';
-  reviewDate?: Date | Timestamp;
-  reviewNotes?: string;
-  createdAt: Date | Timestamp;
-  updatedAt: Date | Timestamp;
-  createdBy: string;
-  site?: string;
+type ColorType = 'primary' | 'secondary' | 'error' | 'warning' | 'info' | 'success';
+
+interface DashboardItem {
+  title: string;
+  icon: JSX.Element;
+  stats: string;
+  color: ColorType;
+  alerts?: {
+    label: string;
+    count: number;
+    color: ColorType;
+  }[];
+  path: string;
+  actionableCounts?: number[];
 }
 
-interface UserSicknessData {
-  currentSickness: SicknessRecord | null;
-  upcomingReviews: SicknessRecord[];
-  recentHistory: SicknessRecord[];
-  triggerStatus: {
-    occurrences: number;
-    totalDays: number;
-    isNearingTrigger: boolean;
-  };
-}
-
-interface UserLeaveInfo {
-  upcomingLeave: LeaveRequest[];
-  pendingRequests: LeaveRequest[];
-  recentDecisions: LeaveRequest[];
-}
-
-const toDate = (value: Date | Timestamp | null | undefined): Date => {
-  if (!value) return new Date();
-  if (value instanceof Date) return value;
-  return value.toDate();
+const toDate = (val: any): Date => {
+  if (!val) return new Date();
+  if (val instanceof Date) return val;
+  if (val.toDate) return val.toDate();
+  return parseISO(val);
 };
 
 const StaffDashboard: React.FC = () => {
   const theme = useTheme();
+  const navigate = useNavigate();
+  
   const { userData } = useAuth();
   const { trainingRecords } = useTraining();
   const { tasks } = useTask();
   const { supervisions } = useSupervision();
   const { staffCompliance } = useCompliance();
-  const { leaderboard, userRank } = useLeaderboard();
   const { sicknessRecords, getTriggerStatus } = useSickness();
   const { leaveRequests, leaveEntitlement } = useLeave();
+  const { userStats } = useGamification();
+  const { users } = useUsers();
 
-  const userRecords = useMemo(() => {
-    if (!userData) return null;
+  const [focusMode, setFocusMode] = useState<boolean>(false);
 
-    const today = startOfDay(new Date());
-    const thirtyDaysFromNow = addDays(today, 30);
+  // Basic user and site info
+  const site = userData?.site || 'Not assigned';
+  const roles = userData?.roles || [];
 
-    const userTrainingRecords = trainingRecords.filter(r => r.staffId === userData.id);
+  // Compute various stats and actionable items
+  const today = startOfDay(new Date());
+  const thirtyDaysFromNow = addDays(today, 30);
 
-    const trainingOnly = userTrainingRecords.filter(r => 
-      TRAINING_COURSES.includes(r.courseTitle)
-    );
-    const f2fOnly = userTrainingRecords.filter(r => 
-      F2F_COURSES.includes(r.courseTitle)
-    );
-
-    const expiredTraining = trainingOnly.filter(record => {
-      if (!record.expiryDate) return false;
-      const expiryDate = toDate(record.expiryDate);
-      return isBefore(expiryDate, today);
-    });
-
-    const expiredF2F = f2fOnly.filter(record => {
-      if (!record.expiryDate) return false;
-      const expiryDate = toDate(record.expiryDate);
-      return isBefore(expiryDate, today);
-    });
-
-    const upcomingTraining = trainingOnly.filter(record => {
-      if (!record.expiryDate) return false;
-      const expiryDate = toDate(record.expiryDate);
-      return isAfter(expiryDate, today) && 
-             isBefore(expiryDate, thirtyDaysFromNow) &&
-             !record.isManuallyScheduled;
-    });
-
-    const upcomingF2F = f2fOnly.filter(record => {
-      if (!record.expiryDate) return false;
-      const expiryDate = toDate(record.expiryDate);
-      return isAfter(expiryDate, today) && 
-             isBefore(expiryDate, thirtyDaysFromNow) &&
-             !record.isManuallyScheduled;
-    });
-
-    const trainingRate = trainingOnly.length > 0 
-      ? ((trainingOnly.length - expiredTraining.length) / trainingOnly.length) * 100 
-      : 100;
-    const f2fRate = f2fOnly.length > 0 
-      ? ((f2fOnly.length - expiredF2F.length) / f2fOnly.length) * 100 
-      : 100;
-
-    const nextTraining = upcomingTraining.sort((a, b) => {
-      const dateA = toDate(a.expiryDate);
-      const dateB = toDate(b.expiryDate);
-      return dateA.getTime() - dateB.getTime();
-    })[0];
-
-    const nextF2F = upcomingF2F.sort((a, b) => {
-      const dateA = toDate(a.expiryDate);
-      const dateB = toDate(b.expiryDate);
-      return dateA.getTime() - dateB.getTime();
-    })[0];
-
-    return {
-      expiredTraining,
-      expiredF2F,
-      upcomingTraining,
-      upcomingF2F,
-      nextTraining,
-      nextF2F,
-      trainingRate,
-      f2fRate,
-    };
+  // Training calculations
+  const userTrainingRecords = useMemo(() => {
+    if (!userData) return [];
+    return trainingRecords.filter(r => r.staffId === userData.id);
   }, [trainingRecords, userData]);
 
+  const trainingOnly = userTrainingRecords.filter(r => TRAINING_COURSES.includes(r.courseTitle));
+  const f2fOnly = userTrainingRecords.filter(r => F2F_COURSES.includes(r.courseTitle));
+
+  const expiredTraining = trainingOnly.filter(record => {
+    if (!record.expiryDate) return false;
+    return isBefore(toDate(record.expiryDate), today);
+  });
+
+  const expiredF2F = f2fOnly.filter(record => {
+    if (!record.expiryDate) return false;
+    return isBefore(toDate(record.expiryDate), today);
+  });
+
+  const upcomingTraining = trainingOnly.filter(record => {
+    if (!record.expiryDate) return false;
+    const expiry = toDate(record.expiryDate);
+    return isAfter(expiry, today) && isBefore(expiry, thirtyDaysFromNow) && !record.isManuallyScheduled;
+  });
+
+  const upcomingF2F = f2fOnly.filter(record => {
+    if (!record.expiryDate) return false;
+    const expiry = toDate(record.expiryDate);
+    return isAfter(expiry, today) && isBefore(expiry, thirtyDaysFromNow) && !record.isManuallyScheduled;
+  });
+
+  const trainingRate = trainingOnly.length > 0 
+    ? ((trainingOnly.length - expiredTraining.length) / trainingOnly.length) * 100 
+    : 100;
+  const f2fRate = f2fOnly.length > 0
+    ? ((f2fOnly.length - expiredF2F.length) / f2fOnly.length) * 100
+    : 100;
+
+  // Tasks assigned to user
   const userTasks = useMemo(() => {
     if (!userData) return [];
     return tasks.filter(task => task.assignedTo === userData.id && task.status !== 'completed');
   }, [tasks, userData]);
 
+  // Supervisions scheduled for user
   const userSupervisions = useMemo(() => {
     if (!userData) return [];
     return supervisions
@@ -183,83 +158,186 @@ const StaffDashboard: React.FC = () => {
       .sort((a, b) => toDate(a.date).getTime() - toDate(b.date).getTime());
   }, [supervisions, userData]);
 
-  const userSicknessData = useMemo<UserSicknessData | null>(() => {
+  // Sickness data
+  const userSickness = useMemo(() => {
     if (!userData) return null;
-
-    const userRecords = sicknessRecords.filter(record => record.staffId === userData.id);
-    const currentSickness = userRecords.find(record => record.status === 'current') || null;
-    const upcomingReviews = userRecords
-      .filter(record => record.status === 'review' && record.reviewDate)
-      .sort((a, b) => toDate(a.reviewDate).getTime() - toDate(b.reviewDate).getTime());
-    
-    const recentHistory = userRecords
-      .filter(record => record.status === 'completed' && record.endDate)
-      .sort((a, b) => toDate(b.endDate).getTime() - toDate(a.endDate).getTime())
-      .slice(0, 3);
-
+    const userRecords = sicknessRecords.filter(r => r.staffId === userData.id);
+    const currentSickness = userRecords.find(r => r.status === 'current');
+    const needingReview = userRecords.filter(r => r.status === 'review');
     const triggerStatus = getTriggerStatus(userData.id);
 
     return {
       currentSickness,
-      upcomingReviews,
-      recentHistory,
-      triggerStatus,
+      needingReviewCount: needingReview.length,
+      trigger: triggerStatus,
     };
   }, [sicknessRecords, userData, getTriggerStatus]);
 
-  const userLeaveInfo = useMemo<UserLeaveInfo>(() => {
-    if (!userData) return {
-      upcomingLeave: [],
-      pendingRequests: [],
-      recentDecisions: [],
-    };
+  // Leave data
+  const userLeave = useMemo(() => {
+    if (!userData) return { pending: 0, upcoming: 0 };
+    const userRequests = leaveRequests.filter(req => req.userId === userData.id);
+    const pending = userRequests.filter(req => req.status === 'pending').length;
+    const upcoming = userRequests.filter(req => req.status === 'approved' && isAfter(parseISO(req.startDate), today)).length;
 
-    const today = startOfDay(new Date());
-    const userRequests = leaveRequests.filter(request => request.userId === userData.id);
-
-    const upcomingLeave = userRequests
-      .filter(request => 
-        request.status === 'approved' && 
-        isAfter(parseISO(request.startDate), today)
-      )
-      .sort((a, b) => parseISO(a.startDate).getTime() - parseISO(b.startDate).getTime());
-
-    const pendingRequests = userRequests
-      .filter(request => request.status === 'pending')
-      .sort((a, b) => parseISO(b.createdAt).getTime() - parseISO(a.createdAt).getTime());
-
-    const recentDecisions = userRequests
-      .filter(request => 
-        (request.status === 'approved' || request.status === 'declined') &&
-        isBefore(parseISO(request.startDate), today)
-      )
-      .sort((a, b) => {
-        // Use updatedAt if available, fall back to createdAt
-        const dateA = a.updatedAt || a.createdAt;
-        const dateB = b.updatedAt || b.createdAt;
-        return parseISO(dateB).getTime() - parseISO(dateA).getTime();
-      })
-      .slice(0, 3);
-
-    return {
-      upcomingLeave,
-      pendingRequests,
-      recentDecisions,
-    };
+    return { pending, upcoming };
   }, [leaveRequests, userData]);
 
-  const handleSupervisionFeedback = async (feedback: Omit<SupervisionFeedback, 'id' | 'submittedAt'>) => {
-    const feedbackRef = collection(db, 'supervisionFeedback');
-    await addDoc(feedbackRef, {
-      ...feedback,
-      submittedAt: Timestamp.now(),
-    });
-  };
+  // Compliance checks
+  const complianceAlerts = useMemo(() => {
+    if (!staffCompliance) return 0;
+    return Object.values(staffCompliance).filter((val: any) => val.status === 'expired' || val.status === 'missing').length;
+  }, [staffCompliance]);
 
-  if (!userRecords) return null;
+  // Quick Actions for Staff
+  const quickActions = [
+    {
+      label: 'Request Leave',
+      path: '/leave/request',
+      icon: <LeaveIcon />,
+    },
+    {
+      label: 'View Rota',
+      path: '/rota',
+      icon: <EventIcon />,
+    },
+    {
+      label: 'Upload Training Docs',
+      path: '/training/upload',
+      icon: <TrainingIcon />,
+    },
+    {
+      label: 'Compliance Dashboard',
+      path: '/compliance',
+      icon: <ComplianceIcon />,
+    },
+    {
+      label: 'Communication Board',
+      path: '/communications',
+      icon: <CommunicationIcon />,
+    },
+  ];
+
+  // Main dashboard items for staff
+  const dashboardItems: DashboardItem[] = [
+    {
+      title: 'Training',
+      icon: <TrainingIcon sx={{ fontSize: 40 }} />,
+      stats: `${expiredTraining.length} Expired, ${upcomingTraining.length} Due Soon`,
+      color: 'warning',
+      alerts: [
+        { label: 'Expired', count: expiredTraining.length, color: 'error' },
+        { label: 'Due Soon', count: upcomingTraining.length, color: 'warning' },
+      ],
+      path: '/training',
+      actionableCounts: [expiredTraining.length, upcomingTraining.length],
+    },
+    {
+      title: 'F2F Sessions',
+      icon: <EventIcon sx={{ fontSize: 40 }} />,
+      stats: `${expiredF2F.length} Expired, ${upcomingF2F.length} Due Soon`,
+      color: 'warning',
+      alerts: [
+        { label: 'Expired', count: expiredF2F.length, color: 'error' },
+        { label: 'Due Soon', count: upcomingF2F.length, color: 'warning' },
+      ],
+      path: '/training/f2f',
+      actionableCounts: [expiredF2F.length, upcomingF2F.length],
+    },
+    {
+      title: 'Leave Requests',
+      icon: <LeaveIcon sx={{ fontSize: 40 }} />,
+      stats: `${userLeave.pending} Pending, ${userLeave.upcoming} Upcoming`,
+      color: 'primary',
+      alerts: userLeave.pending > 0 ? [
+        { label: 'Pending', count: userLeave.pending, color: 'warning' },
+      ] : undefined,
+      path: '/leave',
+      actionableCounts: [userLeave.pending],
+    },
+    {
+      title: 'Tasks',
+      icon: <TaskIcon sx={{ fontSize: 40 }} />,
+      stats: `${userTasks.length} Tasks Assigned`,
+      color: 'info',
+      path: '/tasks',
+      actionableCounts: [userTasks.length],
+    },
+    {
+      title: 'Sickness',
+      icon: <SickIcon sx={{ fontSize: 40 }} />,
+      stats: `${userSickness?.currentSickness ? 'Currently Sick' : 'No Current Sickness'}`,
+      color: 'error',
+      alerts: userSickness?.needingReviewCount
+        ? [{ label: 'Need Review', count: userSickness?.needingReviewCount, color: 'warning' }]
+        : undefined,
+      path: '/sickness',
+      actionableCounts: [
+        userSickness?.currentSickness ? 1 : 0, 
+        userSickness?.needingReviewCount || 0, 
+        userSickness?.trigger.isNearingTrigger ? 1 : 0
+      ],
+    },
+    {
+      title: 'Compliance',
+      icon: <ComplianceIcon sx={{ fontSize: 40 }} />,
+      stats: complianceAlerts > 0 ? `${complianceAlerts} Issues` : 'All Good',
+      color: complianceAlerts > 0 ? 'error' : 'success',
+      path: '/compliance',
+      actionableCounts: [complianceAlerts],
+    },
+    {
+      title: 'Rota',
+      icon: <EventIcon sx={{ fontSize: 40 }} />,
+      stats: 'View Your Shifts',
+      color: 'secondary',
+      path: '/rota',
+      actionableCounts: [],
+    },
+    {
+      title: 'Supervisions',
+      icon: <StaffIcon sx={{ fontSize: 40 }} />,
+      stats: `${userSupervisions.length} Scheduled`,
+      color: 'primary',
+      path: '/supervision',
+      actionableCounts: [userSupervisions.length],
+    },
+    {
+      title: 'Communications',
+      icon: <CommunicationIcon sx={{ fontSize: 40 }} />,
+      stats: 'View Messages',
+      color: 'info',
+      path: '/communications',
+      actionableCounts: [], // Always accessible
+    },
+  ];
+
+  // Filter dashboard items in focus mode: only show if any actionableCounts > 0
+  const visibleDashboardItems = useMemo(() => {
+    if (!focusMode) return dashboardItems;
+    return dashboardItems.filter(item => 
+      item.actionableCounts && item.actionableCounts.some(count => count > 0)
+    );
+  }, [focusMode, dashboardItems]);
+
+  if (!userData) return null;
 
   return (
-    <Box sx={{ p: 3, maxWidth: 1200, mx: 'auto' }}>
+    <Box sx={{ p: 3, maxWidth: 1200, mx: 'auto', fontSize: '1rem' }}>
+      {/* Top Controls: Focus Mode and Help */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2, gap: 3 }}>
+        <Stack direction="row" alignItems="center" spacing={1}>
+          <Typography variant="body2">Focus Mode</Typography>
+          <Switch checked={focusMode} onChange={() => setFocusMode(!focusMode)} />
+        </Stack>
+        <Tooltip title="Need help?">
+          <IconButton onClick={() => navigate('/help')}>
+            <HelpIcon />
+          </IconButton>
+        </Tooltip>
+      </Box>
+
+      {/* Welcome & Gamification Section */}
       <Fade in timeout={800}>
         <Paper 
           elevation={0}
@@ -271,486 +349,225 @@ const StaffDashboard: React.FC = () => {
           }}
         >
           <Grid container spacing={3} alignItems="center">
-            <Grid item xs={12}>
-              <Typography variant="h4" gutterBottom>
-                Welcome back, {userData?.name?.split(' ')[0]}! 👋
+            <Grid item xs={12} md={8}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
+                <Typography variant="h4" sx={{ fontWeight: 'bold' }}>
+                  Welcome back, {userData?.name?.split(' ')[0]}! 👋
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <WorkIcon />
+                  <Typography variant="subtitle1">
+                    {site}
+                  </Typography>
+                </Box>
+                <Tooltip title="Filter data">
+                  <IconButton>
+                    <FilterIcon />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+              <Typography variant="subtitle1" gutterBottom>
+                {expiredTraining.length + expiredF2F.length + (userSickness?.needingReviewCount || 0) > 0
+                  ? `${expiredTraining.length + expiredF2F.length + (userSickness?.needingReviewCount || 0)} items need attention`
+                  : 'Everything looks good! 🎉'}
               </Typography>
-
-              {/* Role Information */}
-              <Box sx={{ mb: 3 }}>
-                <Typography variant="subtitle1" gutterBottom>
-                  Your Roles
-                </Typography>
-                <Box display="flex" gap={1} flexWrap="wrap">
-                  {userData?.roles?.map((role: ShiftRole) => (
-                    <Chip
-                      key={role}
-                      icon={<WorkIcon />}
-                      label={role}
-                      color="primary"
-                      variant="outlined"
-                      sx={{ mb: 1 }}
+              <LinearProgress 
+                variant="determinate" 
+                value={trainingRate}
+                sx={{ 
+                  mt: 2, 
+                  height: 10, 
+                  borderRadius: 5,
+                  bgcolor: alpha(theme.palette.primary.main, 0.1),
+                  '& .MuiLinearProgress-bar': {
+                    borderRadius: 5,
+                    bgcolor: trainingRate === 100 
+                      ? 'success.main'
+                      : trainingRate >= 80
+                      ? 'primary.main'
+                      : 'warning.main',
+                  },
+                }}
+              />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <Box sx={{ position: 'relative', p: 2, textAlign: 'center' }}>
+                <Box
+                  sx={{
+                    position: 'relative',
+                    display: 'inline-flex',
+                    borderRadius: '50%',
+                    bgcolor: alpha(theme.palette.common.white, 0.1),
+                    p: 2,
+                  }}
+                >
+                  <Typography
+                    variant="h4"
+                    component="div"
+                    sx={{ fontWeight: 'bold' }}
+                  >
+                    {Math.round(trainingRate)}%
+                  </Typography>
+                  {trainingRate >= 90 && (
+                    <CelebrationIcon 
+                      sx={{ 
+                        position: 'absolute',
+                        top: -10,
+                        right: -10,
+                        color: theme.palette.warning.light,
+                        animation: 'bounce 1s infinite',
+                      }} 
                     />
-                  ))}
+                  )}
                 </Box>
-                <Typography variant="body2" sx={{ mt: 1, color: 'text.secondary' }}>
-                  Site: {userData?.site || 'Not assigned'}
-                </Typography>
-                {userData?.preferences && (
-                  <>
-                    <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                      Preferred Shifts: {userData.preferences.preferredShifts.join(', ')}
-                    </Typography>
-                    <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                      Max Shifts per Week: {userData.preferences.maxShiftsPerWeek}
-                    </Typography>
-                    <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                      {userData.preferences.flexibleHours ? 'Flexible Hours' : 'Fixed Hours'}
-                      {userData.preferences.nightShiftOnly && ' - Night Shift Only'}
-                    </Typography>
-                  </>
-                )}
-              </Box>
-
-              {/* Leave Section */}
-              <Box sx={{ mb: 3 }}>
-                <Typography variant="subtitle1" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <LeaveIcon />
-                  Leave Status
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                  Training Completion Rate
                 </Typography>
 
-                {/* Leave Entitlement */}
-                <Alert 
-                  severity="info"
-                  sx={{ mb: 2 }}
-                >
-                  Annual Leave Remaining: {leaveEntitlement?.remainingDays || 0} days
-                  {leaveEntitlement?.carryForwardDays ? 
-                    ` (including ${leaveEntitlement.carryForwardDays} carried forward)` : 
-                    ''
-                  }
-                </Alert>
-
-                {/* Upcoming Leave */}
-                {userLeaveInfo.upcomingLeave.length > 0 && (
-                  <>
-                    <Typography variant="body2" color="textSecondary" gutterBottom>
-                      Upcoming Leave
+                {/* Gamification Info */}
+                {!focusMode && userStats && (
+                  <Box sx={{ mt: 3 }}>
+                    <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 1 }}>
+                      Level {userStats.rank}
                     </Typography>
-                    <List>
-                      {userLeaveInfo.upcomingLeave.map(leave => (
-                        <ListItem key={leave.id}>
-                          <ListItemIcon>
-                            <EventIcon color="primary" />
-                          </ListItemIcon>
-                          <ListItemText 
-                            primary={`${format(parseISO(leave.startDate), 'PP')} - ${format(parseISO(leave.endDate), 'PP')}`}
-                            secondary={`${leave.totalDays} days • ${leave.leaveType}`}
-                          />
-                        </ListItem>
-                      ))}
-                    </List>
-                  </>
-                )}
-
-                {/* Pending Requests */}
-                {userLeaveInfo.pendingRequests.length > 0 && (
-                  <>
-                    <Divider sx={{ my: 2 }} />
-                    <Typography variant="body2" color="textSecondary" gutterBottom>
-                      Pending Requests
+                    <Typography variant="body2">
+                      {userStats.points} XP
                     </Typography>
-                    <List>
-                      {userLeaveInfo.pendingRequests.map(request => (
-                        <ListItem key={request.id}>
-                          <ListItemIcon>
-                            <PendingIcon color="warning" />
-                          </ListItemIcon>
-                          <ListItemText 
-                            primary={`${format(parseISO(request.startDate), 'PP')} - ${format(parseISO(request.endDate), 'PP')}`}
-                            secondary={`${request.totalDays} days • ${request.leaveType}`}
-                          />
-                          <Chip 
-                            label="Pending"
-                            color="warning"
+                    <LinearProgress
+                      variant="determinate"
+                      value={Math.min(userStats.points, 100)}
+                      sx={{
+                        mt: 1,
+                        height: 8,
+                        borderRadius: 4,
+                        bgcolor: alpha(theme.palette.primary.main, 0.1),
+                        '& .MuiLinearProgress-bar': {
+                          borderRadius: 4,
+                          bgcolor: 'info.main',
+                        },
+                      }}
+                    />
+                    {userStats.achievements && userStats.achievements.length > 0 && (
+                      <Box sx={{ mt: 2, display: 'flex', gap: 1, justifyContent: 'center', flexWrap: 'wrap' }}>
+                        {userStats.achievements.slice(0, 3).map((badge) => (
+                          <Chip
+                            key={badge.id}
+                            label={badge.title}
+                            icon={<CheckCircleIcon />}
+                            color="primary"
                             size="small"
                           />
-                        </ListItem>
-                      ))}
-                    </List>
-                  </>
-                )}
-
-                {/* Recent Decisions */}
-                {userLeaveInfo.recentDecisions.length > 0 && (
-                  <>
-                    <Divider sx={{ my: 2 }} />
-                    <Typography variant="body2" color="textSecondary" gutterBottom>
-                      Recent Decisions
-                    </Typography>
-                    <List>
-                      {userLeaveInfo.recentDecisions.map(decision => (
-                        <ListItem key={decision.id}>
-                          <ListItemIcon>
-                            {decision.status === 'approved' ? (
-                              <CheckCircleIcon color="success" />
-                            ) : (
-                              <WarningIcon color="error" />
-                            )}
-                          </ListItemIcon>
-                          <ListItemText 
-                            primary={`${format(parseISO(decision.startDate), 'PP')} - ${format(parseISO(decision.endDate), 'PP')}`}
-                            secondary={`${decision.totalDays} days • ${decision.leaveType}`}
-                          />
-                          <Chip 
-                            label={decision.status === 'approved' ? 'Approved' : 'Declined'}
-                            color={decision.status === 'approved' ? 'success' : 'error'}
-                            size="small"
-                          />
-                        </ListItem>
-                      ))}
-                    </List>
-                  </>
-                )}
-
-                <Button
-                  component={RouterLink}
-                  to="/leave"
-                  variant="text"
-                  size="small"
-                  endIcon={<ArrowForwardIcon />}
-                  sx={{ mt: 1 }}
-                >
-                  View All Leave
-                </Button>
-              </Box>
-
-              {/* Sickness Section */}
-              <Box sx={{ mb: 3 }}>
-                <Typography variant="subtitle1" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <SickIcon />
-                  Sickness Status
-                </Typography>
-
-                {userSicknessData?.currentSickness ? (
-                  <Alert 
-                    severity="warning"
-                    sx={{ mb: 2 }}
-                  >
-                    Currently on sick leave since {format(toDate(userSicknessData.currentSickness.startDate), 'PPP')}
-                  </Alert>
-                ) : (
-                  <Alert 
-                    severity="success"
-                    sx={{ mb: 2 }}
-                  >
-                    No current sickness records
-                  </Alert>
-                )}
-
-                {userSicknessData?.triggerStatus.isNearingTrigger && (
-                  <Alert 
-                    severity="error"
-                    sx={{ mb: 2 }}
-                  >
-                    Nearing sickness trigger points:
-                    <br />
-                    • {userSicknessData.triggerStatus.occurrences} occurrences this year
-                    <br />
-                    • {userSicknessData.triggerStatus.totalDays} total days
-                  </Alert>
-                )}
-
-                {userSicknessData && userSicknessData.upcomingReviews.length > 0 && (
-                  <>
-                    <Typography variant="body2" color="textSecondary" gutterBottom>
-                      Upcoming Reviews
-                    </Typography>
-                    <List>
-                      {userSicknessData.upcomingReviews.map(review => (
-                        <ListItem key={review.id}>
-                          <ListItemIcon>
-                            <EventIcon color="warning" />
-                          </ListItemIcon>
-                          <ListItemText 
-                            primary="Return to Work Meeting"
-                            secondary={`Scheduled: ${format(toDate(review.reviewDate), 'PPP')}`}
-                          />
-                        </ListItem>
-                      ))}
-                    </List>
-                  </>
-                )}
-
-                {userSicknessData && userSicknessData.recentHistory.length > 0 && (
-                  <>
-                    <Divider sx={{ my: 2 }} />
-                    <Typography variant="body2" color="textSecondary" gutterBottom>
-                      Recent Sickness History
-                    </Typography>
-                    <List>
-                      {userSicknessData.recentHistory.map(record => (
-                        <ListItem key={record.id}>
-                          <ListItemIcon>
-                            <SickIcon color="action" />
-                          </ListItemIcon>
-                          <ListItemText 
-                            primary={record.reason}
-                            secondary={`${format(toDate(record.startDate), 'PP')} - ${format(toDate(record.endDate), 'PP')}`}
-                          />
-                        </ListItem>
-                      ))}
-                    </List>
-                    <Button
-                      component={RouterLink}
-                      to="/sickness"
-                      variant="text"
-                      size="small"
-                      endIcon={<ArrowForwardIcon />}
-                      sx={{ mt: 1 }}
-                    >
-                      View Full History
-                    </Button>
-                  </>
+                        ))}
+                      </Box>
+                    )}
+                  </Box>
                 )}
               </Box>
-              
-              {/* Tasks Section */}
-              {userTasks.length > 0 && (
-                <Box sx={{ mb: 3 }}>
-                  <Typography variant="h6" gutterBottom>
-                    Your Tasks
-                  </Typography>
-                  <List>
-                    {userTasks.map(task => (
-                      <ListItem key={task.id}>
-                        <ListItemIcon>
-                          <AssignmentIcon color="primary" />
-                        </ListItemIcon>
-                        <ListItemText 
-                          primary={task.title}
-                          secondary={`Due: ${format(toDate(task.dueDate), 'MMM d, yyyy')}`}
-                        />
-                        <Button 
-                          component={RouterLink} 
-                          to="/tasks" 
-                          variant="outlined" 
-                          size="small"
-                        >
-                          View
-                        </Button>
-                      </ListItem>
-                    ))}
-                  </List>
-                </Box>
-              )}
-
-              {/* Training Status */}
-              <Box sx={{ mb: 3 }}>
-                <Typography variant="subtitle1" gutterBottom>
-                  Training Status
-                </Typography>
-                <LinearProgress 
-                  variant="determinate" 
-                  value={userRecords.trainingRate}
-                  sx={{ 
-                    height: 10, 
-                    borderRadius: 5,
-                    bgcolor: alpha(theme.palette.primary.main, 0.1),
-                    '& .MuiLinearProgress-bar': {
-                      borderRadius: 5,
-                      bgcolor: userRecords.trainingRate === 100 
-                        ? 'success.main'
-                        : userRecords.trainingRate >= 80
-                        ? 'primary.main'
-                        : 'warning.main',
-                    },
-                  }}
-                />
-                <Typography variant="body2" sx={{ mt: 1, color: 'text.secondary' }}>
-                  {userRecords.trainingRate === 100 
-                    ? '🎉 All training up to date!'
-                    : `${userRecords.expiredTraining.length} training modules need attention`}
-                </Typography>
-
-                {/* Expired Training */}
-                {userRecords.expiredTraining.length > 0 && (
-                  <List>
-                    {userRecords.expiredTraining.map(record => (
-                      <ListItem key={record.id}>
-                        <ListItemIcon>
-                          <WarningIcon color="error" />
-                        </ListItemIcon>
-                        <ListItemText 
-                          primary={record.courseTitle}
-                          secondary={`Expired: ${format(toDate(record.expiryDate), 'MMM d, yyyy')}`}
-                        />
-                      </ListItem>
-                    ))}
-                  </List>
-                )}
-
-                {/* Upcoming Training */}
-                {userRecords.upcomingTraining.length > 0 && (
-                  <List>
-                    {userRecords.upcomingTraining.map(record => (
-                      <ListItem key={record.id}>
-                        <ListItemIcon>
-                          <PendingIcon color="warning" />
-                        </ListItemIcon>
-                        <ListItemText 
-                          primary={record.courseTitle}
-                          secondary={`Due: ${format(toDate(record.expiryDate), 'MMM d, yyyy')}`}
-                        />
-                      </ListItem>
-                    ))}
-                  </List>
-                )}
-              </Box>
-
-              {/* F2F Training Status */}
-              <Box sx={{ mb: 3 }}>
-                <Typography variant="subtitle1" gutterBottom>
-                  Face-to-Face Training Status
-                </Typography>
-                <LinearProgress 
-                  variant="determinate" 
-                  value={userRecords.f2fRate}
-                  sx={{ 
-                    height: 10, 
-                    borderRadius: 5,
-                    bgcolor: alpha(theme.palette.primary.main, 0.1),
-                    '& .MuiLinearProgress-bar': {
-                      borderRadius: 5,
-                      bgcolor: userRecords.f2fRate === 100 
-                        ? 'success.main'
-                        : userRecords.f2fRate >= 80
-                        ? 'primary.main'
-                        : 'warning.main',
-                    },
-                  }}
-                />
-                <Typography variant="body2" sx={{ mt: 1, color: 'text.secondary' }}>
-                  {userRecords.f2fRate === 100 
-                    ? '🎉 All F2F training up to date!'
-                    : `${userRecords.expiredF2F.length} F2F sessions need attention`}
-                </Typography>
-
-                {/* Expired F2F */}
-                {userRecords.expiredF2F.length > 0 && (
-                  <List>
-                    {userRecords.expiredF2F.map(record => (
-                      <ListItem key={record.id}>
-                        <ListItemIcon>
-                          <WarningIcon color="error" />
-                        </ListItemIcon>
-                        <ListItemText 
-                          primary={record.courseTitle}
-                          secondary={`Expired: ${format(toDate(record.expiryDate), 'MMM d, yyyy')}`}
-                        />
-                      </ListItem>
-                    ))}
-                  </List>
-                )}
-
-                {/* Upcoming F2F */}
-                {userRecords.upcomingF2F.length > 0 && (
-                  <List>
-                    {userRecords.upcomingF2F.map(record => (
-                      <ListItem key={record.id}>
-                        <ListItemIcon>
-                          <PendingIcon color="warning" />
-                        </ListItemIcon>
-                        <ListItemText 
-                          primary={record.courseTitle}
-                          secondary={`Due: ${format(toDate(record.expiryDate), 'MMM d, yyyy')}`}
-                        />
-                      </ListItem>
-                    ))}
-                  </List>
-                )}
-              </Box>
-
-              {/* Supervisions Section */}
-              {userSupervisions.length > 0 && (
-                <Box sx={{ mb: 3 }}>
-                  <Typography variant="subtitle1" gutterBottom>
-                    Scheduled Supervisions
-                  </Typography>
-                  <List>
-                    {userSupervisions.map(supervision => (
-                      <ListItem key={supervision.id}>
-                        <ListItemIcon>
-                          <EventIcon color="primary" />
-                        </ListItemIcon>
-                        <ListItemText 
-                          primary={`Supervision with ${supervision.supervisor}`}
-                          secondary={`Scheduled: ${format(toDate(supervision.date), 'MMM d, yyyy')}`}
-                        />
-                        <Button 
-                          component={RouterLink} 
-                          to={`/supervision/${supervision.id}`} 
-                          variant="outlined" 
-                          size="small"
-                        >
-                          View Form
-                        </Button>
-                      </ListItem>
-                    ))}
-                  </List>
-                </Box>
-              )}
-
-              {/* Compliance Section */}
-              {staffCompliance && (
-                <Box sx={{ mb: 3 }}>
-                  <Typography variant="subtitle1" gutterBottom>
-                    Your Compliance Status
-                  </Typography>
-                  <List>
-                    {Object.entries(staffCompliance).map(([key, value]) => {
-                      if (key === 'userId') return null;
-                      return (
-                        <ListItem key={key}>
-                          <ListItemIcon>
-                            {value.status === 'valid' ? (
-                              <CheckCircleIcon color="success" />
-                            ) : (
-                              <WarningIcon color="error" />
-                            )}
-                          </ListItemIcon>
-                          <ListItemText 
-                            primary={key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}
-                            secondary={value.expiryDate ? 
-                              `Expires: ${format(value.expiryDate.toDate(), 'MMM d, yyyy')}` : 
-                              'No expiry date'}
-                          />
-                        </ListItem>
-                      );
-                    })}
-                  </List>
-                </Box>
-              )}
             </Grid>
           </Grid>
         </Paper>
       </Fade>
 
-      <Grid container spacing={3}>
-        {/* Left Column */}
-        <Grid item xs={12} md={8}>
-          <AttendanceSection />
-          <SupervisionFeedbackSection onSubmit={handleSupervisionFeedback} />
-        </Grid>
+      {/* Quick Actions at the Top */}
+      <Card sx={{ p: 3, mb: 4, borderRadius: 3 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+          <QuickActionIcon sx={{ mr: 1, color: theme.palette.primary.main }} />
+          <Typography variant="h5" sx={{ flexGrow: 1, fontWeight: 'bold' }}>
+            Quick Actions
+          </Typography>
+        </Box>
+        <Divider sx={{ mb: 2 }} />
+        <Stack spacing={2} direction="row" flexWrap="wrap" gap={2}>
+          {quickActions.map((action, i) => (
+            <Fade in timeout={300} style={{ transitionDelay: `${i * 100}ms` }} key={action.label}>
+              <Button
+                variant="contained"
+                startIcon={action.icon}
+                onClick={() => navigate(action.path)}
+                sx={{
+                  textTransform: 'none',
+                  borderRadius: 3,
+                  bgcolor: theme.palette.primary.main,
+                  fontWeight: 'bold',
+                  '&:hover': {
+                    bgcolor: alpha(theme.palette.primary.main, 0.8),
+                  },
+                }}
+              >
+                {action.label}
+              </Button>
+            </Fade>
+          ))}
+        </Stack>
+      </Card>
 
-        {/* Right Column */}
-        <Grid item xs={12} md={4}>
-          <LeaderboardSection />
-        </Grid>
+      {/* Main Dashboard Sections */}
+      <Grid container spacing={3}>
+        {visibleDashboardItems.map((item, index) => (
+          <Grid item xs={12} sm={6} md={4} key={index}>
+            <Card
+              sx={{
+                height: '100%',
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                '&:hover': {
+                  transform: 'translateY(-4px)',
+                  boxShadow: 4,
+                },
+                bgcolor: alpha(theme.palette[item.color].main, 0.05),
+                borderRadius: 3,
+              }}
+              onClick={() => navigate(item.path)}
+            >
+              <CardContent>
+                <Stack spacing={2}>
+                  <Box display="flex" alignItems="center" gap={1}>
+                    <Box sx={{ color: `${item.color}.main` }}>
+                      {item.icon}
+                    </Box>
+                    <Typography variant="h6" sx={{ fontWeight: 'bold' }}>{item.title}</Typography>
+                  </Box>
+                  <Typography variant="body1" color="textSecondary">
+                    {item.stats}
+                  </Typography>
+                  {item.alerts && (
+                    <Box display="flex" gap={1} flexWrap="wrap">
+                      {item.alerts.map((alert, i) => (
+                        <Chip
+                          key={i}
+                          label={`${alert.count} ${alert.label}`}
+                          color={alert.color}
+                          size="small"
+                        />
+                      ))}
+                    </Box>
+                  )}
+                </Stack>
+              </CardContent>
+            </Card>
+          </Grid>
+        ))}
       </Grid>
+
+      {/* Leaderboard and Gamification (hidden in focus mode) */}
+      {!focusMode && (
+        <Box sx={{ mt: 3 }}>
+          <LeaderboardSection />
+        </Box>
+      )}
+
+      {/* Additional Sections like recent communications, messages, etc. can be added here */}
+
+      <style>
+        {`
+          @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+          }
+        `}
+      </style>
     </Box>
   );
 };
 
-export { StaffDashboard };
 export default StaffDashboard;

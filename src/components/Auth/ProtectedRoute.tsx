@@ -28,15 +28,20 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     return <Navigate to="/login" replace />
   }
 
-  if (requireAdmin && !isAdmin) {
-    return <Navigate to="/" replace />
+  // Admin can access everything
+  if (isAdmin) {
+    return element
   }
 
-  if (requireManager && !isSiteManager && !isAdmin) {
-    return <Navigate to="/" replace />
-  }
+  // Check if the user has any of the required roles
+  const hasRequiredRole = (
+    (requireAdmin && isAdmin) ||
+    (requireManager && (isSiteManager || isAdmin)) ||
+    (requireStaff && (isStaff || isSiteManager || isAdmin)) ||
+    (!requireAdmin && !requireManager && !requireStaff)
+  )
 
-  if (requireStaff && !isStaff && !isAdmin) {
+  if (!hasRequiredRole) {
     return <Navigate to="/" replace />
   }
 

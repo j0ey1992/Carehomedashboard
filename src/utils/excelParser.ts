@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { addDays } from 'date-fns';
 import { TrainingRecord, User, Task } from '../types';
-import { collection, getDocs, query, where, doc, setDoc, Timestamp, addDoc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, query, where, doc, setDoc, Timestamp, addDoc, getDoc, FieldValue } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { ShiftRole } from '../types/rota';
 import {
@@ -20,6 +20,14 @@ export {
   COMPLIANCE_COURSES,
   DIRECT_COMPLETION_COURSES,
 } from './courseConstants';
+
+// Helper function to ensure we have a Date object
+const ensureDate = (value: Date | Timestamp | FieldValue | undefined): Date => {
+  if (!value) return new Date();
+  if (value instanceof Date) return value;
+  if (value instanceof Timestamp) return value.toDate();
+  return new Date();
+};
 
 interface ExcelRow {
   [key: string]: string | number | null;
@@ -451,13 +459,13 @@ const findOrCreateUser = async (
       }
     };
 
-    // Create the user document in the users collection
+    // Create the user document in the users collection with proper date conversion
     await setDoc(doc(db, 'users', userId), {
       ...newUser,
-      startDate: Timestamp.fromDate(newUser.startDate!),
-      lastLogin: Timestamp.fromDate(newUser.lastLogin!),
-      createdAt: Timestamp.fromDate(newUser.createdAt!),
-      updatedAt: Timestamp.fromDate(newUser.updatedAt!),
+      startDate: Timestamp.fromDate(ensureDate(newUser.startDate)),
+      lastLogin: Timestamp.fromDate(ensureDate(newUser.lastLogin)),
+      createdAt: Timestamp.fromDate(ensureDate(newUser.createdAt)),
+      updatedAt: Timestamp.fromDate(ensureDate(newUser.updatedAt)),
     });
 
     console.log('Created new user:', staffName, 'with ID:', userId);
@@ -499,7 +507,7 @@ const createManagementTask = async (record: Partial<TrainingRecord>): Promise<vo
       ...task,
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
-      dueDate: Timestamp.fromDate(task.dueDate),
+      dueDate: Timestamp.fromDate(ensureDate(task.dueDate)),
     });
   } catch (err) {
     console.error('Error creating F2F task:', err);

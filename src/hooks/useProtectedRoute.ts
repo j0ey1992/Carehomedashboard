@@ -26,20 +26,15 @@ export const useProtectedRoute = (options: ProtectedRouteOptions = {}) => {
       return
     }
 
-    // Check role-based access
-    if (options.requireAdmin && !isAdmin) {
-      navigate('/', { replace: true })
-      return
-    }
+    // Check if the user has any of the required roles
+    const hasRequiredRole = (
+      (options.requireAdmin && isAdmin) ||
+      (options.requireManager && (isSiteManager || isAdmin)) ||
+      (options.requireStaff && (isStaff || isSiteManager || isAdmin)) ||
+      (!options.requireAdmin && !options.requireManager && !options.requireStaff)
+    )
 
-    // Manager can access manager and staff pages
-    if (options.requireManager && !isSiteManager && !isAdmin) {
-      navigate('/', { replace: true })
-      return
-    }
-
-    // Staff pages are accessible by staff, managers, and admins
-    if (options.requireStaff && !isStaff && !isSiteManager && !isAdmin) {
+    if (!hasRequiredRole) {
       navigate('/', { replace: true })
       return
     }

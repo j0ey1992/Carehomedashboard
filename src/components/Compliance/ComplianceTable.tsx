@@ -132,17 +132,17 @@ const ComplianceTable: React.FC<ComplianceTableProps> = ({
     return 'valid';
   };
 
-  // Filter users based on search term and filters
-  const filteredUsers = users.filter(user => {
-    const matchesSearch = user.name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesSite = siteFilter === 'all' || user.site === siteFilter;
-    
-    if (statusFilter === 'all') return matchesSearch && matchesSite;
+// Filter users based on search term and filters
+const filteredUsers = users.filter(user => {
+  const matchesSearch = user.name?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false;
+  const matchesSite = siteFilter === 'all' || user.site === siteFilter;
+  
+  if (statusFilter === 'all') return matchesSearch && matchesSite;
 
-    const userRecord = complianceRecords.find(r => r.userId === user.id);
-    const userStatus = getUserStatus(userRecord);
-    return matchesSearch && matchesSite && userStatus === statusFilter;
-  });
+  const userRecord = complianceRecords.find(r => r.userId === user.id);
+  const userStatus = getUserStatus(userRecord);
+  return matchesSearch && matchesSite && userStatus === statusFilter;
+});
 
   const getStatusChipProps = (status: string) => {
     switch (status) {

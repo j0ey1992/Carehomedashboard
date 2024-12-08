@@ -20,8 +20,7 @@ import {
 } from '@mui/material';
 import {
   AISchedulerOptions,
-  WeeklyShiftRequirements,
-  ShiftRole
+  WeeklyShiftRequirements
 } from '../../types/rota';
 
 interface AutoSchedulerProps {

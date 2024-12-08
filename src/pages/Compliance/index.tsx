@@ -15,15 +15,10 @@ interface ComplianceRecord extends StaffCompliance {
 }
 
 const CompliancePage = () => {
-  const { 
-    updateCompliance, 
-    updateHealthCheck, 
-    signAgreement, 
+  const {
+    updateCompliance,
     uploadEvidence,
     addDynamicItem,
-    updateDynamicItem,
-    removeDynamicItem,
-    uploadDynamicEvidence,
     completeItem,
   } = useCompliance();
   const { data: users = [] } = useData<User>('users');
@@ -46,7 +41,7 @@ const CompliancePage = () => {
         return { users, complianceRecords };
       case 'manager':
         const managerSiteUsers = users.filter(user => user.site === userData.site);
-        const managerSiteRecords = complianceRecords.filter(record => 
+        const managerSiteRecords = complianceRecords.filter(record =>
           managerSiteUsers.some(user => user.id === record.userId)
         );
         return { users: managerSiteUsers, complianceRecords: managerSiteRecords };
@@ -62,7 +57,7 @@ const CompliancePage = () => {
   // Calculate stats
   const stats = useMemo(() => {
     const total = 10; // Fixed total of 10 for each category
-    
+
     const recordStats = filteredData.complianceRecords.reduce((acc, record) => {
       // Get all compliance fields excluding userId and site
       const complianceFields = Object.entries(record)
@@ -95,7 +90,7 @@ const CompliancePage = () => {
     }, { expired: 0, pending: 0, upToDate: 0 });
 
     // If a user has no compliance record, count them as pending
-    const usersWithoutRecords = filteredData.users.filter(user => 
+    const usersWithoutRecords = filteredData.users.filter(user =>
       !filteredData.complianceRecords.some(record => record.userId === user.id)
     ).length;
 
@@ -130,8 +125,8 @@ const CompliancePage = () => {
   const handleEdit = async (userId: string, field: keyof StaffCompliance) => {
     if (!userData) return;
 
-    const canEdit = 
-      userData.role === 'admin' || 
+    const canEdit =
+      userData.role === 'admin' ||
       (userData.role === 'manager' && filteredData.users.some(u => u.id === userId)) ||
       (userData.role === 'staff' && userData.id === userId);
 
@@ -143,8 +138,8 @@ const CompliancePage = () => {
   const handleFileUpload = async (field: keyof StaffCompliance, file: File) => {
     if (!userData?.id) return;
 
-    const canUpload = 
-      userData.role === 'admin' || 
+    const canUpload =
+      userData.role === 'admin' ||
       userData.role === 'manager' ||
       (userData.role === 'staff' && field !== 'dbsCheck');
 
@@ -165,8 +160,8 @@ const CompliancePage = () => {
   const handleAddTask = (userId: string) => {
     if (!userData) return;
 
-    const canAddTask = 
-      userData.role === 'admin' || 
+    const canAddTask =
+      userData.role === 'admin' ||
       (userData.role === 'manager' && filteredData.users.some(u => u.id === userId));
 
     if (!canAddTask) return;
@@ -177,8 +172,8 @@ const CompliancePage = () => {
   const handleUpdateCompliance = async (userId: string, field: keyof StaffCompliance, data: ComplianceItem) => {
     if (!userData) return;
 
-    const canUpdate = 
-      userData.role === 'admin' || 
+    const canUpdate =
+      userData.role === 'admin' ||
       (userData.role === 'manager' && filteredData.users.some(u => u.id === userId)) ||
       (userData.role === 'staff' && userData.id === userId && field !== 'dbsCheck');
 
@@ -217,8 +212,8 @@ const CompliancePage = () => {
   const handleComplete = async (userId: string, field: keyof StaffCompliance) => {
     if (!userData) return;
 
-    const canComplete = 
-      userData.role === 'admin' || 
+    const canComplete =
+      userData.role === 'admin' ||
       (userData.role === 'manager' && filteredData.users.some(u => u.id === userId)) ||
       (userData.role === 'staff' && userData.id === userId);
 
@@ -236,11 +231,11 @@ const CompliancePage = () => {
     }
   };
 
-  const pageTitle = userData?.role === 'admin' ? 'Staff Compliance' : 
+  const pageTitle = userData?.role === 'admin' ? 'Staff Compliance' :
                    userData?.role === 'manager' ? `${userData.site} Staff Compliance` :
                    'My Compliance Records';
-  
-  const pageSubtitle = userData?.role === 'admin' ? 
+
+  const pageSubtitle = userData?.role === 'admin' ?
     `${stats.upToDate} of ${stats.total} staff members fully compliant` :
     userData?.role === 'manager' ?
     `${stats.upToDate} of ${stats.total} site staff members fully compliant` :
@@ -250,7 +245,7 @@ const CompliancePage = () => {
     <Box sx={{ p: { xs: 2, sm: 3, md: 4 }, maxWidth: 1400, mx: 'auto' }}>
       <Fade in timeout={600}>
         <Box>
-          <PageHeader 
+          <PageHeader
             title={pageTitle}
             subtitle={pageSubtitle}
             helpText="Track and manage compliance records including DBS checks, health assessments, and required documentation."
@@ -260,7 +255,7 @@ const CompliancePage = () => {
 
           <Fade in timeout={800}>
             <Box>
-              <ComplianceHeader 
+              <ComplianceHeader
                 stats={stats}
                 userRole={userData?.role}
               />

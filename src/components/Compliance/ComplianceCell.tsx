@@ -9,6 +9,10 @@ import {
   Stack,
   Link,
   Button,
+  Card,
+  CardContent,
+  CardActions,
+  Collapse,
 } from '@mui/material';
 import {
   CheckCircle as ValidIcon,
@@ -19,6 +23,7 @@ import {
   Download as DownloadIcon,
   AttachFile as FileIcon,
   Done as DoneIcon,
+  ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
 import { format, isAfter, addDays } from 'date-fns';
@@ -56,6 +61,7 @@ const ComplianceCell: React.FC<ComplianceCellProps> = ({
   const theme = useTheme();
   const item = record?.[field] as ComplianceItem | undefined;
   const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const getStatusInfo = () => {
     if (!item?.date) {
@@ -129,130 +135,137 @@ const ComplianceCell: React.FC<ComplianceCellProps> = ({
   return (
     <>
       <TableCell 
-        onClick={handleClick}
         sx={{ 
-          cursor: onEdit ? 'pointer' : 'default',
-          '&:hover': onEdit ? {
-            bgcolor: theme => theme.palette.action.hover,
-          } : {},
-          p: 1.5,
-          minWidth: 150,
-          maxWidth: 200,
+          p: 1,
+          minWidth: { xs: '100%', sm: 250 },
+          maxWidth: { xs: '100%', sm: 300 },
         }}
       >
-        <Stack spacing={1}>
-          <Chip
-            icon={status.icon}
-            label={status.label}
-            size="small"
-            sx={{
-              width: '100%',
-              bgcolor: `${status.color}15`,
-              color: status.color,
-              fontWeight: 600,
-              fontSize: '0.75rem',
-              '& .MuiChip-icon': {
-                color: 'inherit'
-              }
-            }}
-          />
-
-          {item?.date && (
-            <Typography
-              variant="caption"
-              sx={{
-                display: 'block',
-                color: theme.palette.text.secondary,
-                fontSize: '0.75rem'
-              }}
-            >
-              Updated: {format(item.date.toDate(), 'dd/MM/yyyy')}
-            </Typography>
-          )}
-
-          <Typography
-            variant="caption"
-            sx={{
-              display: 'block',
-              color: status.color,
-              fontSize: '0.75rem',
-              fontWeight: 500
-            }}
-          >
-            {status.description}
-          </Typography>
-
-          {item?.evidence && (
-            <Link
-              href={item.evidence.fileUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={{
-                fontSize: '0.75rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 0.5,
-                color: theme.palette.info.main,
-                textDecoration: 'none',
-                '&:hover': {
-                  textDecoration: 'underline'
-                }
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <FileIcon fontSize="small" />
-              View Document
-            </Link>
-          )}
-
-          {onFileUpload && (
-            <FileUploadButton
-              field={field}
-              onUpload={(_, file) => onFileUpload(field, file)}
-              disabled={uploading}
-            />
-          )}
-
-          {!item?.date && onEdit && (
-            <Button
-              startIcon={<AddIcon />}
-              size="small"
-              fullWidth
-              variant="outlined"
-              onClick={handleClick}
-              sx={{
-                color: status.color,
-                borderColor: status.color,
-                '&:hover': {
-                  borderColor: status.color,
+        <Card 
+          elevation={2}
+          sx={{
+            transition: 'all 0.3s ease-in-out',
+            '&:hover': {
+              transform: 'translateY(-2px)',
+              boxShadow: theme.shadows[4],
+            },
+          }}
+        >
+          <CardContent>
+            <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
+              <Chip
+                icon={status.icon}
+                label={status.label}
+                size="small"
+                sx={{
                   bgcolor: `${status.color}15`,
-                }
-              }}
-            >
-              Add
-            </Button>
-          )}
+                  color: status.color,
+                  fontWeight: 600,
+                  fontSize: '0.75rem',
+                  '& .MuiChip-icon': {
+                    color: 'inherit'
+                  }
+                }}
+              />
+              <IconButton
+                size="small"
+                onClick={() => setExpanded(!expanded)}
+                aria-expanded={expanded}
+                aria-label="show more"
+              >
+                <ExpandMoreIcon />
+              </IconButton>
+            </Stack>
 
-          {showMarkComplete && (
-            <Button
-              startIcon={<DoneIcon />}
-              size="small"
-              fullWidth
-              variant="outlined"
-              onClick={handleComplete}
-              sx={{
-                color: THEME.success,
-                borderColor: THEME.success,
-                '&:hover': {
-                  borderColor: THEME.success,
-                  bgcolor: `${THEME.success}15`,
-                }
-              }}
-            >
-              Mark Complete
-            </Button>
-          )}
-        </Stack>
+            <Typography variant="h6" component="div" gutterBottom>
+              {field.split(/(?=[A-Z])/).join(' ')}
+            </Typography>
+
+            <Collapse in={expanded} timeout="auto" unmountOnExit>
+              <Stack spacing={1}>
+                {item?.date && (
+                  <Typography variant="body2" color="text.secondary">
+                    Updated: {format(item.date.toDate(), 'dd/MM/yyyy')}
+                  </Typography>
+                )}
+
+                <Typography variant="body2" color={status.color} fontWeight="medium">
+                  {status.description}
+                </Typography>
+
+                {item?.evidence && (
+                  <Link
+                    href={item.evidence.fileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    sx={{
+                      fontSize: '0.875rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.5,
+                      color: theme.palette.info.main,
+                      textDecoration: 'none',
+                      '&:hover': {
+                        textDecoration: 'underline'
+                      }
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <FileIcon fontSize="small" />
+                    View Document
+                  </Link>
+                )}
+              </Stack>
+            </Collapse>
+          </CardContent>
+
+          <CardActions>
+            {onFileUpload && (
+              <FileUploadButton
+                field={field}
+                onUpload={(_, file) => onFileUpload(field, file)}
+                disabled={uploading}
+              />
+            )}
+
+            {!item?.date && onEdit && (
+              <Button
+                startIcon={<AddIcon />}
+                size="small"
+                variant="outlined"
+                onClick={handleClick}
+                sx={{
+                  color: status.color,
+                  borderColor: status.color,
+                  '&:hover': {
+                    borderColor: status.color,
+                    bgcolor: `${status.color}15`,
+                  }
+                }}
+              >
+                Add
+              </Button>
+            )}
+
+            {showMarkComplete && (
+              <Button
+                startIcon={<DoneIcon />}
+                size="small"
+                variant="contained"
+                onClick={handleComplete}
+                sx={{
+                  bgcolor: THEME.success,
+                  color: '#fff',
+                  '&:hover': {
+                    bgcolor: theme.palette.success.dark,
+                  }
+                }}
+              >
+                Complete
+              </Button>
+            )}
+          </CardActions>
+        </Card>
       </TableCell>
 
       <ComplianceInputDialog

@@ -1,5 +1,5 @@
-import { Timestamp } from 'firebase/firestore'
-import { ShiftRole, ShiftTime, StaffPreferences, StaffPerformanceMetrics } from './rota'
+import { Timestamp, FieldValue } from 'firebase/firestore';
+import { ShiftRole, ShiftTime, StaffPreferences, StaffPerformanceMetrics } from './rota';
 
 export interface TrainingRecord {
   id: string;
@@ -61,10 +61,12 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  phoneNumber?: string;
+  photoURL?: string;
   role: 'admin' | 'staff' | 'manager';
   roles: ShiftRole[];
-  phoneNumber?: string;
-  startDate?: Date;
+  sites: string[];
+  site?: string;
   departmentId: string;
   managerId?: string;
   probationStatus: 'pending' | 'completed' | 'failed';
@@ -78,27 +80,25 @@ export interface User {
     email: boolean;
     sms: boolean;
   };
-  sites: string[];
-  site?: string;
-  lastLogin: Date;
-  createdAt: Date;
-  updatedAt: Date;
+  lastLogin: Date | Timestamp | FieldValue;
+  createdAt: Date | Timestamp | FieldValue;
+  updatedAt: Date | Timestamp | FieldValue;
   authCreated: boolean;
   location?: string;
   isAdmin?: boolean;
-  photoURL?: string;
-  points?: number;
-  attendance?: {
+  points: number;
+  attendance: {
     attendanceRate: number;
     lateDays: number;
     sickDays: number;
     totalDays: number;
   };
-  contractedHours?: number;
-  annualLeave?: number;
-  sickness?: number;
-  preferences?: StaffPreferences;
-  performanceMetrics?: StaffPerformanceMetrics;
+  contractedHours: number;
+  annualLeave: number;
+  sickness: number;
+  preferences: StaffPreferences;
+  performanceMetrics: StaffPerformanceMetrics;
+  startDate?: Date | Timestamp | FieldValue;
   password?: string;
   trainingStatus?: Record<string, any>;
   leave?: Array<{
@@ -153,10 +153,9 @@ export interface NewUserData {
     email: boolean;
     sms: boolean;
   };
-  // Metadata fields
-  createdAt?: Date;
-  updatedAt?: Date;
-  lastLogin?: Date;
+  createdAt?: Date | Timestamp | FieldValue;
+  updatedAt?: Date | Timestamp | FieldValue;
+  lastLogin?: Date | Timestamp | FieldValue;
   authCreated?: boolean;
   probationStatus?: 'pending' | 'completed' | 'failed';
   trainingProgress?: {
@@ -171,6 +170,7 @@ export interface NewUserData {
   photoURL?: string;
   points?: number;
   password?: string;
+  startDate?: Date | Timestamp | FieldValue;
   trainingStatus?: Record<string, any>;
   leave?: Array<{
     startDate: string;

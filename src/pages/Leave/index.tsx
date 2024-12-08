@@ -8,37 +8,32 @@ import {
   Typography,
   Paper,
   Stack,
-  Chip,
-  IconButton,
-  Tooltip,
-  Fade,
-  Grid,
-  Card,
-  CardContent,
   Alert,
   LinearProgress,
   useTheme,
   alpha,
   styled,
+  Fade,
+  Grid,
+  Card,
+  CardContent,
+  IconButton
 } from '@mui/material';
 import {
   Add as AddIcon,
   Event as CalendarIcon,
   AccessTime as TimeIcon,
   CheckCircle as CheckCircleIcon,
-  Warning as WarningIcon,
-  Info as InfoIcon,
-  Close as CloseIcon,
   EmojiEvents as AchievementIcon,
+  Close as CloseIcon
 } from '@mui/icons-material';
 import PageHeader from '../../components/Common/PageHeader';
 import { LeaveRequestForm } from '../../components/Leave/LeaveRequestForm';
 import { LeaveRequestList } from '../../components/Leave/LeaveRequestList';
 import { useLeave } from '../../contexts/LeaveContext';
-import { ActionButton, PageHeaderProps } from '../../types';
-import { format, isAfter, isBefore, addDays } from 'date-fns';
+import { ActionButton } from '../../types';
+import { format, isAfter, isBefore } from 'date-fns';
 
-// Styled Components
 const StyledCard = styled(Card)(({ theme }) => ({
   height: '100%',
   transition: 'all 0.3s ease',
@@ -50,47 +45,26 @@ const StyledCard = styled(Card)(({ theme }) => ({
   overflow: 'hidden',
 }));
 
-const StyledButton = styled(Button)(({ theme }) => ({
-  borderRadius: '12px',
-  padding: '10px 24px',
-  transition: 'all 0.2s ease',
-  '&:hover': {
-    transform: 'scale(1.02)',
-  },
-}));
-
 const LeavePage: React.FC = () => {
   const theme = useTheme();
   const { leaveEntitlement, leaveRequests, isLoading } = useLeave();
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
 
-  // Calculate leave statistics
   const stats = useMemo(() => {
     const today = new Date();
     const upcoming = leaveRequests.filter(request => 
       request.status === 'pending' && isAfter(new Date(request.startDate), today)
     );
     const approved = leaveRequests.filter(request => request.status === 'approved');
-    const declined = leaveRequests.filter(request => request.status === 'declined');
+    const totalRequests = leaveRequests.length;
 
     return {
       upcoming: upcoming.length,
       approved: approved.length,
-      declined: declined.length,
-      totalRequests: leaveRequests.length
+      totalRequests
     };
   }, [leaveRequests]);
-
-  const handleFormClose = () => {
-    setIsFormOpen(false);
-  };
-
-  const handleFormSuccess = () => {
-    setIsFormOpen(false);
-    setShowSuccess(true);
-    setTimeout(() => setShowSuccess(false), 5000);
-  };
 
   const actions: ActionButton[] = [
     {
@@ -103,10 +77,18 @@ const LeavePage: React.FC = () => {
     }
   ];
 
-  // Summary Cards
+  const handleFormClose = () => {
+    setIsFormOpen(false);
+  };
+
+  const handleFormSuccess = () => {
+    setIsFormOpen(false);
+    setShowSuccess(true);
+    setTimeout(() => setShowSuccess(false), 5000);
+  };
+
   const renderSummaryCards = () => (
     <Grid container spacing={3}>
-      {/* Leave Balance Card */}
       <Grid item xs={12} md={6} lg={3}>
         <StyledCard>
           <CardContent>
@@ -152,7 +134,6 @@ const LeavePage: React.FC = () => {
         </StyledCard>
       </Grid>
 
-      {/* Upcoming Leaves Card */}
       <Grid item xs={12} md={6} lg={3}>
         <StyledCard>
           <CardContent>
@@ -173,7 +154,6 @@ const LeavePage: React.FC = () => {
         </StyledCard>
       </Grid>
 
-      {/* Approved Leaves Card */}
       <Grid item xs={12} md={6} lg={3}>
         <StyledCard>
           <CardContent>
@@ -194,7 +174,6 @@ const LeavePage: React.FC = () => {
         </StyledCard>
       </Grid>
 
-      {/* Total Requests Card */}
       <Grid item xs={12} md={6} lg={3}>
         <StyledCard>
           <CardContent>
@@ -227,10 +206,8 @@ const LeavePage: React.FC = () => {
             actions={actions}
           />
 
-          {/* Summary Cards */}
           {renderSummaryCards()}
 
-          {/* Loading Progress */}
           {isLoading && (
             <LinearProgress 
               sx={{ 
@@ -241,7 +218,6 @@ const LeavePage: React.FC = () => {
             />
           )}
 
-          {/* Leave Requests List */}
           <Box sx={{ mt: 4 }}>
             <Paper 
               sx={{ 
@@ -255,7 +231,6 @@ const LeavePage: React.FC = () => {
             </Paper>
           </Box>
 
-          {/* Leave Request Form Dialog */}
           <Dialog
             open={isFormOpen}
             onClose={handleFormClose}
@@ -292,7 +267,6 @@ const LeavePage: React.FC = () => {
             </DialogContent>
           </Dialog>
 
-          {/* Success Notification */}
           <Fade in={showSuccess}>
             <Alert
               severity="success"

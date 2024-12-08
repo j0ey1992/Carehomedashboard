@@ -1,15 +1,14 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   Box,
   Typography,
   Chip,
-  IconButton,
+  Button,
   Tooltip,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
-  Button,
   Stack,
   Paper,
   TextField,
@@ -18,10 +17,10 @@ import {
   Alert,
   useTheme,
   alpha,
-  Collapse
+  Collapse,
+  IconButton
 } from '@mui/material';
 import {
-  Edit as EditIcon,
   Delete as DeleteIcon,
   FilterList as FilterIcon,
   Assessment as AssessmentIcon,
@@ -33,7 +32,7 @@ import {
   Close as CloseIcon
 } from '@mui/icons-material';
 import DataTable from '../Common/DataTable';
-import { LeaveRequest, LeaveType, LeaveStatus } from '../../types/leave';
+import { LeaveRequest, LeaveStatus } from '../../types/leave';
 import { useLeave } from '../../contexts/LeaveContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useRotaContext } from '../../contexts/RotaContext';
@@ -75,60 +74,22 @@ export const LeaveRequestList: React.FC = () => {
     site: isAdmin ? 'all' : userData?.site
   });
 
-  // Simplified canApproveRequests function
-  const canApproveRequests = (request: LeaveRequest): boolean => {
+  const canViewRequest = useCallback((request: LeaveRequest): boolean => {
     if (!currentUser || !userData) return false;
-
-    // Cannot approve own requests
-    if (request.userId === currentUser.uid) return false;
-
-    // Admin can approve all requests
     if (isAdmin) return true;
-
-    // Manager can approve requests from their sites
     if (userData.role === 'manager') {
       return userData.sites?.includes(request.site) || false;
     }
-
-    return false;
-  };
-
-  // Rest of the functions remain the same...
-  const canViewRequest = (request: LeaveRequest): boolean => {
-    if (!currentUser || !userData) return false;
-
-    // Admin can view all requests
-    if (isAdmin) return true;
-
-    // Manager can view requests from their sites
-    if (userData.role === 'manager') {
-      return userData.sites?.includes(request.site) || false;
-    }
-
-    // Staff can only view their own requests
     return request.userId === currentUser.uid;
-  };
+  }, [currentUser, userData, isAdmin]);
 
-  // Filter leave requests based on user role and filters
   const filteredRequests = useMemo(() => {
     return leaveRequests.filter(request => {
-      // First check if user can view this request
       if (!canViewRequest(request)) return false;
+      if (filters.status !== 'all' && request.status !== filters.status) return false;
+      if (filters.leaveType !== 'all' && request.leaveType !== filters.leaveType) return false;
+      if (isAdmin && filters.site !== 'all' && request.site !== filters.site) return false;
 
-      // Then apply other filters
-      if (filters.status !== 'all' && request.status !== filters.status) {
-        return false;
-      }
-
-      if (filters.leaveType !== 'all' && request.leaveType !== filters.leaveType) {
-        return false;
-      }
-
-      if (isAdmin && filters.site !== 'all' && request.site !== filters.site) {
-        return false;
-      }
-
-      // Date range filter
       if (filters.dateRange !== 'all') {
         const startDate = parseISO(request.startDate);
         let rangeStart: Date;
@@ -162,9 +123,8 @@ export const LeaveRequestList: React.FC = () => {
 
       return true;
     });
-  }, [leaveRequests, filters, userData, currentUser]);
+  }, [leaveRequests, filters, userData, currentUser, isAdmin, canViewRequest]);
 
-  // Calculate statistics
   const stats = useMemo(() => {
     const total = filteredRequests.length;
     const approved = filteredRequests.filter(r => r.status === 'approved').length;
@@ -176,7 +136,6 @@ export const LeaveRequestList: React.FC = () => {
       .filter(r => r.status === 'approved')
       .reduce((sum, r) => sum + r.totalDays, 0);
 
-    // Calculate leave usage by site
     const siteUsage: Record<string, number> = {};
     filteredRequests.forEach(request => {
       if (request.status === 'approved') {
@@ -209,59 +168,50 @@ export const LeaveRequestList: React.FC = () => {
     }
   };
 
-  const handleEdit = (request: LeaveRequest) => {
-    setSelectedRequest(request);
-    setIsEditDialogOpen(true);
-  };
-
   const handleEditDialogClose = () => {
     setIsEditDialogOpen(false);
     setSelectedRequest(null);
   };
 
-  const handleApprove = async () => {
-    if (!selectedRequest || !currentUser) return;
-
+  const handleApproveRequest = async (request: LeaveRequest) => {
+    if (!request || !currentUser) return;
     try {
-      await updateLeaveRequest(selectedRequest.id, {
+      await updateLeaveRequest(request.id, {
         status: 'approved',
         approvedBy: currentUser.uid,
         approvalNotes: 'Approved by manager/admin',
         updatedAt: new Date().toISOString()
       });
-
       notify({
         type: 'system',
         title: 'Leave Request Approved',
-        message: `Leave request for ${selectedRequest.staffName} has been approved`,
-        userId: selectedRequest.userId
+        message: `Leave request for ${request.staffName} has been approved`,
+        userId: request.userId
       });
-
       setSelectedRequest(null);
+      setIsEditDialogOpen(false);
     } catch (error) {
       console.error('Error approving leave request:', error);
     }
   };
 
-  const handleDecline = async () => {
-    if (!selectedRequest || !currentUser) return;
-
+  const handleDeclineRequest = async (request: LeaveRequest) => {
+    if (!request || !currentUser) return;
     try {
-      await updateLeaveRequest(selectedRequest.id, {
+      await updateLeaveRequest(request.id, {
         status: 'declined',
         approvedBy: currentUser.uid,
         approvalNotes: 'Declined by manager/admin',
         updatedAt: new Date().toISOString()
       });
-
       notify({
         type: 'system',
         title: 'Leave Request Declined',
-        message: `Leave request for ${selectedRequest.staffName} has been declined`,
-        userId: selectedRequest.userId
+        message: `Leave request for ${request.staffName} has been declined`,
+        userId: request.userId
       });
-
       setSelectedRequest(null);
+      setIsEditDialogOpen(false);
     } catch (error) {
       console.error('Error declining leave request:', error);
     }
@@ -279,7 +229,6 @@ export const LeaveRequestList: React.FC = () => {
 
   const handleCancelConfirm = async () => {
     if (!selectedRequest || !currentUser) return;
-
     try {
       await updateLeaveRequest(selectedRequest.id, { 
         status: 'cancelled' as LeaveStatus,
@@ -302,7 +251,6 @@ export const LeaveRequestList: React.FC = () => {
 
   const handleDeleteConfirm = async () => {
     if (!selectedRequest || !currentUser) return;
-
     try {
       await updateLeaveRequest(selectedRequest.id, { 
         status: 'declined' as LeaveStatus,
@@ -317,23 +265,30 @@ export const LeaveRequestList: React.FC = () => {
 
   const checkRotaConflict = (request: LeaveRequest): boolean => {
     if (!currentRota) return false;
-    
     const leaveStart = parseISO(request.startDate);
     const leaveEnd = parseISO(request.endDate);
     const rotaStart = parseISO(currentRota.startDate);
     const rotaEnd = parseISO(currentRota.endDate);
 
     return isWithinInterval(leaveStart, { start: rotaStart, end: rotaEnd }) ||
-           isWithinInterval(leaveEnd, { start: rotaStart, end: rotaEnd });
+      isWithinInterval(leaveEnd, { start: rotaStart, end: rotaEnd });
   };
 
   const isLeaveInCurrentYear = (request: LeaveRequest): boolean => {
     const now = new Date();
-    const yearStart = new Date(now.getFullYear(), 3, 1); // April 1st
-    const yearEnd = new Date(now.getFullYear() + 1, 2, 31); // March 31st next year
+    const yearStart = new Date(now.getFullYear(), 3, 1);
+    const yearEnd = new Date(now.getFullYear() + 1, 2, 31);
     const leaveStart = parseISO(request.startDate);
-    
     return isAfter(leaveStart, yearStart) && isBefore(leaveStart, yearEnd);
+  };
+
+  const canManage = (request: LeaveRequest): boolean => {
+    if (!currentUser || !userData) return false;
+    if (isAdmin) return true;
+    if (userData.role === 'manager') {
+      return userData.sites?.includes(request.site) || false;
+    }
+    return false;
   };
 
   const columns: DataTableColumn<LeaveRequest>[] = [
@@ -381,7 +336,7 @@ export const LeaveRequestList: React.FC = () => {
             </Tooltip>
           )}
           {!isLeaveInCurrentYear(row as LeaveRequest) && (
-            <Tooltip title="Leave is in different leave year">
+            <Tooltip title="Leave is in a different leave year">
               <EventIcon color="info" fontSize="small" />
             </Tooltip>
           )}
@@ -392,25 +347,19 @@ export const LeaveRequestList: React.FC = () => {
       id: 'actions' as LeaveRequestColumn,
       label: 'Actions',
       align: 'right',
-      format: (_: any, row?: LeaveRequest) => {
+      format: (_, row?: LeaveRequest) => {
         if (!row) return null;
-
         const isOwnRequest = currentUser && row.userId === currentUser.uid;
-        const canManage = isAdmin || (userData?.role === 'manager' && userData.sites?.includes(row.site));
 
         return (
           <Stack direction="row" spacing={1} justifyContent="flex-end">
-            {/* Show approve/decline buttons for pending requests */}
-            {row.status === 'pending' && canManage && !isOwnRequest && (
+            {row.status === 'pending' && canManage(row) && !isOwnRequest && (
               <>
                 <Button
                   variant="contained"
                   color="success"
                   size="small"
-                  onClick={() => {
-                    setSelectedRequest(row);
-                    handleApprove();
-                  }}
+                  onClick={() => handleApproveRequest(row)}
                   startIcon={<CheckCircleIcon />}
                   sx={{ minWidth: '100px' }}
                 >
@@ -420,10 +369,7 @@ export const LeaveRequestList: React.FC = () => {
                   variant="contained"
                   color="error"
                   size="small"
-                  onClick={() => {
-                    setSelectedRequest(row);
-                    handleDecline();
-                  }}
+                  onClick={() => handleDeclineRequest(row)}
                   startIcon={<CloseIcon />}
                   sx={{ minWidth: '100px' }}
                 >
@@ -432,7 +378,6 @@ export const LeaveRequestList: React.FC = () => {
               </>
             )}
 
-            {/* Staff can only cancel their approved requests */}
             {isOwnRequest && row.status === 'approved' && (
               <Button
                 variant="outlined"
@@ -445,8 +390,7 @@ export const LeaveRequestList: React.FC = () => {
               </Button>
             )}
 
-            {/* Show delete button for pending requests */}
-            {row.status === 'pending' && (isOwnRequest || canManage) && (
+            {row.status === 'pending' && (isOwnRequest || canManage(row)) && (
               <Button
                 variant="outlined"
                 color="error"
@@ -466,14 +410,7 @@ export const LeaveRequestList: React.FC = () => {
   return (
     <Box>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 3 }}>
-        <Typography variant="h6">
-          Leave Requests
-          {!isAdmin && userData?.role === 'manager' && (
-            <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-              ({userData.sites?.join(', ')})
-            </Typography>
-          )}
-        </Typography>
+        <Typography variant="h6">Leave Requests</Typography>
         <Stack direction="row" spacing={1}>
           <Tooltip title="Toggle Filters">
             <IconButton onClick={() => setShowFilters(!showFilters)}>
@@ -488,7 +425,6 @@ export const LeaveRequestList: React.FC = () => {
         </Stack>
       </Stack>
 
-      {/* Statistics Section */}
       <Collapse in={showStats}>
         <Grid container spacing={2} sx={{ mb: 3 }}>
           <Grid item xs={12} md={6}>
@@ -571,7 +507,6 @@ export const LeaveRequestList: React.FC = () => {
         </Grid>
       </Collapse>
 
-      {/* Filters Section */}
       <Collapse in={showFilters}>
         <Paper
           sx={{
@@ -675,14 +610,13 @@ export const LeaveRequestList: React.FC = () => {
         </Paper>
       </Collapse>
 
-      {/* Main Table */}
       <DataTable
         columns={columns}
         data={filteredRequests}
         emptyMessage="No leave requests found"
       />
 
-      {/* Edit Dialog */}
+      {/* Optional Edit Dialog if you need it */}
       <Dialog
         open={isEditDialogOpen}
         onClose={handleEditDialogClose}
@@ -758,17 +692,17 @@ export const LeaveRequestList: React.FC = () => {
           <Button onClick={handleEditDialogClose}>
             Cancel
           </Button>
-          {selectedRequest && (isAdmin || (userData?.role === 'manager' && userData.sites?.includes(selectedRequest.site))) && selectedRequest.userId !== currentUser?.uid && (
+          {selectedRequest && canManage(selectedRequest) && selectedRequest.userId !== currentUser?.uid && (
             <>
               <Button
-                onClick={handleDecline}
+                onClick={() => handleDeclineRequest(selectedRequest)}
                 color="error"
                 startIcon={<CloseIcon />}
               >
                 Decline
               </Button>
               <Button
-                onClick={handleApprove}
+                onClick={() => handleApproveRequest(selectedRequest)}
                 color="success"
                 variant="contained"
                 startIcon={<CheckCircleIcon />}
