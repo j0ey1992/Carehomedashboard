@@ -5,8 +5,14 @@ import { useCompliance } from '../../contexts/ComplianceContext';
 import { useAuth } from '../../contexts/AuthContext';
 import useData from '../../hooks/useData';
 import { User } from '../../types';
-import { StaffCompliance, ComplianceItem, DynamicComplianceItem } from '../../types/compliance';
-import ComplianceTable from '../../components/Compliance/ComplianceTable';
+import { 
+  StaffCompliance, 
+  ComplianceItem, 
+  DynamicComplianceItem,
+  HealthCheckItem,
+  CompetencyItem 
+} from '../../types/compliance';
+import { default as ComplianceTableComponent } from '../../components/Compliance/ComplianceTable';
 import ComplianceAchievements from '../../components/Compliance/ComplianceAchievements';
 import ComplianceHeader from '../../components/Compliance/ComplianceHeader';
 
@@ -20,17 +26,22 @@ const CompliancePage = () => {
     uploadEvidence,
     addDynamicItem,
     completeItem,
+    allStaffCompliance,
   } = useCompliance();
   const { data: users = [] } = useData<User>('users');
-  const { data: complianceRecords = [] } = useData<ComplianceRecord>('compliance');
   const { userData } = useAuth();
 
   // State
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [hoveredRow, setHoveredRow] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+
+  // Convert StaffCompliance[] to ComplianceRecord[]
+  const complianceRecords = useMemo(() => 
+    allStaffCompliance.map(record => ({
+      ...record,
+      userId: record.userId || '',
+    })) as ComplianceRecord[],
+  [allStaffCompliance]);
 
   // Filter data based on user role and site
   const filteredData = useMemo(() => {
@@ -56,9 +67,11 @@ const CompliancePage = () => {
 
   // Calculate stats
   const stats = useMemo(() => {
-    const total = 10; // Fixed total of 10 for each category
+    const total = filteredData.users.length || 10; // Use actual user count or default to 10
+    let upToDate = 0;
+    let expired = total; // Initially all records are expired
 
-    const recordStats = filteredData.complianceRecords.reduce((acc, record) => {
+    filteredData.complianceRecords.forEach(record => {
       // Get all compliance fields excluding userId and site
       const complianceFields = Object.entries(record)
         .filter(([key]) => key !== 'userId' && key !== 'site' && key !== 'dynamicItems')
@@ -75,42 +88,29 @@ const CompliancePage = () => {
       // Combine all statuses
       const allStatuses = [...complianceFields, ...dynamicStatuses];
 
-      // A record is expired if any item is expired
-      const hasExpired = allStatuses.includes('expired');
-      // A record is pending if any item is pending and none are expired
-      const hasPending = !hasExpired && allStatuses.includes('pending');
       // A record is valid only if all items are valid
       const allValid = allStatuses.length > 0 && allStatuses.every(status => status === 'valid');
 
-      return {
-        expired: acc.expired + (hasExpired ? 1 : 0),
-        pending: acc.pending + (hasPending ? 1 : 0),
-        upToDate: acc.upToDate + (allValid ? 1 : 0),
-      };
-    }, { expired: 0, pending: 0, upToDate: 0 });
+      if (allValid) {
+        upToDate++;
+        expired--;
+      }
+    });
 
-    // If a user has no compliance record, count them as pending
-    const usersWithoutRecords = filteredData.users.filter(user =>
-      !filteredData.complianceRecords.some(record => record.userId === user.id)
-    ).length;
-
-    recordStats.pending += usersWithoutRecords;
-
-    // Calculate completion rate based on fixed total of 10
-    const completionRate = (recordStats.upToDate / total) * 100;
+    // Calculate completion rate
+    const completionRate = (upToDate / total) * 100;
 
     return {
-      total, // Fixed total of 10
-      upToDate: recordStats.upToDate,
-      expired: recordStats.expired,
-      pending: recordStats.pending,
+      total,
+      upToDate,
+      expired,
       completionRate,
     };
   }, [filteredData]);
 
   // Calculate achievements
   const achievements = useMemo(() => {
-    const allCompliant = stats.expired === 0 && stats.pending === 0;
+    const allCompliant = stats.expired === 0;
     const highCompletion = stats.completionRate >= 90;
     const noExpired = stats.expired === 0;
 
@@ -131,8 +131,6 @@ const CompliancePage = () => {
       (userData.role === 'staff' && userData.id === userId);
 
     if (!canEdit) return;
-
-    setSelectedUserId(userId);
   };
 
   const handleFileUpload = async (field: keyof StaffCompliance, file: File) => {
@@ -146,12 +144,11 @@ const CompliancePage = () => {
     if (!canUpload) return;
 
     setUploading(true);
-    setError(null);
 
     try {
       await uploadEvidence(userData.id, field, file);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      console.error('Error uploading file:', err);
     } finally {
       setUploading(false);
     }
@@ -169,7 +166,11 @@ const CompliancePage = () => {
     console.log('Adding task for user:', userId);
   };
 
-  const handleUpdateCompliance = async (userId: string, field: keyof StaffCompliance, data: ComplianceItem) => {
+  const handleUpdateCompliance = async (
+    userId: string, 
+    field: keyof StaffCompliance, 
+    data: ComplianceItem | HealthCheckItem | CompetencyItem
+  ) => {
     if (!userData) return;
 
     const canUpdate =
@@ -179,15 +180,23 @@ const CompliancePage = () => {
 
     if (!canUpdate) return;
 
-    setLoading(true);
-    setError(null);
-
     try {
-      await updateCompliance(userId, { [field]: data });
+      // Get current compliance record
+      const currentRecord = complianceRecords.find(record => record.userId === userId);
+      if (!currentRecord) return;
+
+      // Create update data with userId and site
+      const updateData: StaffCompliance = {
+        userId,
+        site: currentRecord.site,
+        [field]: {
+          ...data,
+        },
+      };
+
+      await updateCompliance(userId, updateData);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
-    } finally {
-      setLoading(false);
+      console.error('Error updating compliance:', err);
     }
   };
 
@@ -197,15 +206,10 @@ const CompliancePage = () => {
     const canCreate = userData.role === 'admin' || userData.role === 'manager';
     if (!canCreate) return;
 
-    setLoading(true);
-    setError(null);
-
     try {
       await addDynamicItem(userData.id, data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
-    } finally {
-      setLoading(false);
+      console.error('Error creating dynamic compliance:', err);
     }
   };
 
@@ -219,15 +223,10 @@ const CompliancePage = () => {
 
     if (!canComplete) return;
 
-    setLoading(true);
-    setError(null);
-
     try {
       await completeItem(userId, field);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
-    } finally {
-      setLoading(false);
+      console.error('Error completing item:', err);
     }
   };
 
@@ -260,7 +259,7 @@ const CompliancePage = () => {
                 userRole={userData?.role}
               />
 
-              <ComplianceTable
+              <ComplianceTableComponent
                 users={filteredData.users}
                 complianceRecords={filteredData.complianceRecords}
                 hoveredRow={hoveredRow}

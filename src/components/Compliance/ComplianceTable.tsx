@@ -25,13 +25,13 @@ import {
   Zoom,
   useTheme,
   alpha,
+  Switch,
+  useMediaQuery,
 } from '@mui/material';
 import {
   Search as SearchIcon,
   Add as AddIcon,
-  FilterList as FilterIcon,
   Edit as EditIcon,
-  Download as DownloadIcon,
   FileDownload as ExportIcon,
   Assignment as TaskIcon,
   Refresh as RefreshIcon,
@@ -44,7 +44,7 @@ import {
   HealthCheckItem, 
   SignableItem, 
   CompetencyItem,
-  DynamicComplianceItem 
+  DynamicComplianceItem,
 } from '../../types/compliance';
 import ComplianceCell from './ComplianceCell';
 import ComplianceInputDialog from './ComplianceInputDialog';
@@ -65,7 +65,7 @@ interface ComplianceTableProps {
   onEdit?: (userId: string, field: keyof StaffCompliance) => void;
   onFileUpload?: (field: keyof StaffCompliance, file: File) => Promise<void>;
   onAddTask?: (userId: string) => void;
-  onUpdateCompliance?: (userId: string, field: keyof StaffCompliance, data: ComplianceItem) => Promise<void>;
+  onUpdateCompliance?: (userId: string, field: keyof StaffCompliance, data: ComplianceItem | CompetencyItem | HealthCheckItem) => Promise<void>;
   onCreateDynamicCompliance?: (data: Omit<DynamicComplianceItem, 'date' | 'expiryDate' | 'status' | 'evidence'>) => Promise<void>;
   onComplete?: (userId: string, field: keyof StaffCompliance) => Promise<void>;
 }
@@ -78,6 +78,9 @@ const complianceFields: { key: keyof StaffCompliance; label: string }[] = [
   { key: 'induction', label: 'Induction' },
   { key: 'stressRiskAssessment', label: 'Risk Assessment' },
   { key: 'albacMat', label: 'Albac Mat' },
+  { key: 'dysphagia', label: 'Dysphagia Competency' },
+  { key: 'manualHandling', label: 'Manual Handling Competency' },
+  { key: 'basicLifeSupport', label: 'Basic Life Support Competency' },
 ];
 
 const ComplianceTable: React.FC<ComplianceTableProps> = ({
@@ -102,56 +105,65 @@ const ComplianceTable: React.FC<ComplianceTableProps> = ({
   const [dynamicDialogOpen, setDynamicDialogOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [selectedField, setSelectedField] = useState<keyof StaffCompliance | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [focusModeEnabled, setFocusModeEnabled] = useState(false);
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
   // Get unique sites from users
   const sites = Array.from(new Set(users.map(user => user.site))).filter(Boolean);
 
   // Get user's compliance status
-  const getUserStatus = (record?: ComplianceRecord): 'valid' | 'expired' | 'pending' => {
-    if (!record) return 'pending';
+  const getUserStatus = (record?: ComplianceRecord): 'valid' | 'expired' => {
+    if (!record) return 'expired';
 
-    const statuses = Object.entries(record)
-      .filter(([key]) => key !== 'userId' && key !== 'site')
+    const statuses: ('valid' | 'expired')[] = Object.entries(record)
+      .filter(([key]) => key !== 'userId' && key !== 'site' && key !== 'dynamicItems')
       .map(([_, value]) => {
         if (
           typeof value === 'object' && 
           value !== null && 
-          (
-            'status' in value && 
-            (value as ComplianceItem | HealthCheckItem | SignableItem | CompetencyItem).status
-          )
+          'status' in value &&
+          (value.status === 'valid' || value.status === 'expired')
         ) {
-          return (value as ComplianceItem).status;
+          return value.status;
         }
-        return 'pending';
+        return 'expired';
       });
 
-    if (statuses.includes('expired')) return 'expired';
-    if (statuses.includes('pending')) return 'pending';
-    return 'valid';
+    // Add dynamic items statuses
+    if (record.dynamicItems) {
+      Object.values(record.dynamicItems).forEach(item => {
+        if (item && typeof item === 'object' && 'status' in item) {
+          const status = item.status === 'valid' ? 'valid' : 'expired';
+          statuses.push(status);
+        }
+      });
+    }
+
+    return statuses.includes('expired') ? 'expired' : 'valid';
   };
 
-// Filter users based on search term and filters
-const filteredUsers = users.filter(user => {
-  const matchesSearch = user.name?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false;
-  const matchesSite = siteFilter === 'all' || user.site === siteFilter;
-  
-  if (statusFilter === 'all') return matchesSearch && matchesSite;
+  // Filter users based on search term, filters, and focus mode
+  const filteredUsers = users.filter(user => {
+    const matchesSearch = user.name?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false;
+    const matchesSite = siteFilter === 'all' || user.site === siteFilter;
+    
+    const userRecord = complianceRecords.find(r => r.userId === user.id);
+    const userStatus = getUserStatus(userRecord);
 
-  const userRecord = complianceRecords.find(r => r.userId === user.id);
-  const userStatus = getUserStatus(userRecord);
-  return matchesSearch && matchesSite && userStatus === statusFilter;
-});
+    if (focusModeEnabled) {
+      return matchesSearch && matchesSite && userStatus === 'expired';
+    }
+
+    if (statusFilter === 'all') return matchesSearch && matchesSite;
+    return matchesSearch && matchesSite && userStatus === statusFilter;
+  });
 
   const getStatusChipProps = (status: string) => {
     switch (status) {
       case 'valid':
         return { color: THEME.success, label: 'COMPLIANT', icon: '✓' };
-      case 'expired':
-        return { color: THEME.error, label: 'EXPIRED', icon: '!' };
       default:
-        return { color: THEME.warning, label: 'PENDING', icon: '?' };
+        return { color: THEME.error, label: 'EXPIRED', icon: '!' };
     }
   };
 
@@ -161,13 +173,12 @@ const filteredUsers = users.filter(user => {
     setInputDialogOpen(true);
   };
 
-  const handleSubmitCompliance = async (data: ComplianceItem) => {
+  const handleSubmitCompliance = async (data: ComplianceItem | CompetencyItem) => {
     if (selectedUser && selectedField && onUpdateCompliance) {
       await onUpdateCompliance(selectedUser, selectedField, data);
       setInputDialogOpen(false);
       setSelectedUser(null);
       setSelectedField(null);
-      setRefreshKey(prev => prev + 1);
     }
   };
 
@@ -178,17 +189,13 @@ const filteredUsers = users.filter(user => {
       
       const complianceStatuses = complianceFields.reduce<Record<string, string>>((acc, field) => {
         const value = record?.[field.key];
-        let status = 'pending';
+        let status: 'valid' | 'expired' = 'expired';
         
         if (
           value && 
           typeof value === 'object' && 
-          'status' in value && 
-          (
-            value.status === 'valid' || 
-            value.status === 'expired' || 
-            value.status === 'pending'
-          )
+          'status' in value &&
+          (value.status === 'valid' || value.status === 'expired')
         ) {
           status = value.status;
         }
@@ -227,7 +234,19 @@ const filteredUsers = users.filter(user => {
   const getInitialData = (userId: string, field: keyof StaffCompliance) => {
     const userRecord = complianceRecords.find(r => r.userId === userId);
     if (!userRecord) return undefined;
-    return userRecord[field] as ComplianceItem | undefined;
+
+    const item = userRecord[field];
+    if (!item || typeof item !== 'object') return undefined;
+
+    if (field === 'healthCheck') {
+      return undefined; // Health check items are handled by HealthCheckDialog
+    }
+
+    if (field === 'albacMat' || field === 'dysphagia' || field === 'manualHandling' || field === 'basicLifeSupport') {
+      return item as CompetencyItem;
+    }
+
+    return item as ComplianceItem;
   };
 
   const canManageCompliance = (targetUserId: string) => {
@@ -244,6 +263,95 @@ const filteredUsers = users.filter(user => {
     return (
       userData.role === 'admin' ||
       (userData.role === 'manager' && users.some(u => u.id === targetUserId && u.site === userData.site))
+    );
+  };
+
+  const renderMobileView = (user: User) => {
+    const userRecord = complianceRecords.find(r => r.userId === user.id);
+    const userStatus = getUserStatus(userRecord);
+    const { color: statusColor, label: statusLabel, icon: statusIcon } = getStatusChipProps(userStatus);
+
+    return (
+      <Paper 
+        sx={{ 
+          p: 2, 
+          mb: 2,
+          borderRadius: 2,
+          boxShadow: theme.shadows[2],
+          '&:hover': {
+            boxShadow: theme.shadows[4],
+          }
+        }}
+      >
+        <Stack spacing={2}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="subtitle1" fontWeight="bold">{user.name}</Typography>
+            <Chip
+              label={`${statusIcon} ${statusLabel}`}
+              size="small"
+              sx={{
+                bgcolor: `${statusColor}15`,
+                color: statusColor,
+                fontWeight: 600,
+              }}
+            />
+          </Box>
+          
+          <Stack direction="row" spacing={1}>
+            {user.role && (
+              <Chip label={user.role} size="small" variant="outlined" />
+            )}
+            {user.site && (
+              <Chip label={user.site} size="small" variant="outlined" />
+            )}
+          </Stack>
+
+          <Box>
+            {complianceFields.map(field => (
+              <Box key={field.key} sx={{ mt: 1 }}>
+                <Typography variant="caption" color="textSecondary">
+                  {field.label}
+                </Typography>
+                <ComplianceCell
+                  record={userRecord}
+                  field={field.key}
+                  user={user}
+                  uploading={uploading}
+                  onEdit={canManageCompliance(user.id) ? onEdit : undefined}
+                  onFileUpload={canManageCompliance(user.id) ? onFileUpload : undefined}
+                  onComplete={canManageCompliance(user.id) ? onComplete : undefined}
+                  onUpdateCompliance={canManageCompliance(user.id) ? onUpdateCompliance : undefined}
+                />
+              </Box>
+            ))}
+          </Box>
+
+          {(canManageCompliance(user.id) || canAddTask(user.id)) && (
+            <Stack direction="row" spacing={1} justifyContent="flex-end">
+              {canAddTask(user.id) && onAddTask && (
+                <Button
+                  startIcon={<TaskIcon />}
+                  onClick={() => onAddTask(user.id)}
+                  variant="outlined"
+                  size="small"
+                >
+                  Add Task
+                </Button>
+              )}
+              {canManageCompliance(user.id) && (
+                <Button
+                  startIcon={<EditIcon />}
+                  onClick={() => handleAddCompliance(user.id, 'dbsCheck')}
+                  variant="contained"
+                  size="small"
+                >
+                  Edit
+                </Button>
+              )}
+            </Stack>
+          )}
+        </Stack>
+      </Paper>
     );
   };
 
@@ -278,110 +386,94 @@ const filteredUsers = users.filter(user => {
                     </InputAdornment>
                   ),
                 }}
-                sx={{
-                  '& .MuiOutlinedInput-root': {
-                    '&:hover fieldset': {
-                      borderColor: theme.palette.primary.main,
-                    },
-                    '&.Mui-focused fieldset': {
-                      borderColor: theme.palette.primary.main,
-                      borderWidth: 2,
-                    },
-                  },
-                }}
               />
             </Grid>
-            <Grid item xs={6} md={2}>
-              <FormControl size="small" fullWidth>
-                <InputLabel>Status</InputLabel>
-                <Select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  label="Status"
-                >
-                  <MenuItem value="all">All Statuses</MenuItem>
-                  <MenuItem value="valid">
-                    <Chip 
-                      label="COMPLIANT" 
-                      size="small"
-                      sx={{ 
-                        bgcolor: `${THEME.success}15`,
-                        color: THEME.success,
-                        fontWeight: 600,
-                      }}
-                    />
-                  </MenuItem>
-                  <MenuItem value="pending">
-                    <Chip 
-                      label="PENDING" 
-                      size="small"
-                      sx={{ 
-                        bgcolor: `${THEME.warning}15`,
-                        color: THEME.warning,
-                        fontWeight: 600,
-                      }}
-                    />
-                  </MenuItem>
-                  <MenuItem value="expired">
-                    <Chip 
-                      label="EXPIRED" 
-                      size="small"
-                      sx={{ 
-                        bgcolor: `${THEME.error}15`,
-                        color: THEME.error,
-                        fontWeight: 600,
-                      }}
-                    />
-                  </MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
-            {(userData?.role === 'admin' || userData?.role === 'manager') && sites.length > 0 && (
-              <Grid item xs={6} md={2}>
-                <FormControl size="small" fullWidth>
-                  <InputLabel>Site</InputLabel>
-                  <Select
-                    value={siteFilter}
-                    onChange={(e) => setSiteFilter(e.target.value)}
-                    label="Site"
-                  >
-                    <MenuItem value="all">All Sites</MenuItem>
-                    {sites.map(site => (
-                      <MenuItem key={site} value={site}>{site}</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Grid>
+            
+            {!focusModeEnabled && (
+              <>
+                <Grid item xs={6} md={2}>
+                  <FormControl size="small" fullWidth>
+                    <InputLabel>Status</InputLabel>
+                    <Select
+                      value={statusFilter}
+                      onChange={(e) => setStatusFilter(e.target.value)}
+                      label="Status"
+                    >
+                      <MenuItem value="all">All Statuses</MenuItem>
+                      <MenuItem value="valid">
+                        <Chip 
+                          label="COMPLIANT" 
+                          size="small"
+                          sx={{ 
+                            bgcolor: `${THEME.success}15`,
+                            color: THEME.success,
+                            fontWeight: 600,
+                          }}
+                        />
+                      </MenuItem>
+                      <MenuItem value="expired">
+                        <Chip 
+                          label="EXPIRED" 
+                          size="small"
+                          sx={{ 
+                            bgcolor: `${THEME.error}15`,
+                            color: THEME.error,
+                            fontWeight: 600,
+                          }}
+                        />
+                      </MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {(userData?.role === 'admin' || userData?.role === 'manager') && sites.length > 0 && (
+                  <Grid item xs={6} md={2}>
+                    <FormControl size="small" fullWidth>
+                      <InputLabel>Site</InputLabel>
+                      <Select
+                        value={siteFilter}
+                        onChange={(e) => setSiteFilter(e.target.value)}
+                        label="Site"
+                      >
+                        <MenuItem value="all">All Sites</MenuItem>
+                        {sites.map(site => (
+                          <MenuItem key={site} value={site}>{site}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                )}
+              </>
             )}
+
             <Grid item xs={12} md={4}>
-              <Stack direction="row" spacing={1} justifyContent="flex-end">
+              <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center">
+                <FormControl component="fieldset">
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Typography variant="body2" color="textSecondary">
+                      Focus Mode
+                    </Typography>
+                    <Switch
+                      checked={focusModeEnabled}
+                      onChange={(e) => setFocusModeEnabled(e.target.checked)}
+                      color="primary"
+                    />
+                  </Stack>
+                </FormControl>
+
                 <Button
                   variant="outlined"
                   startIcon={<ExportIcon />}
                   onClick={handleExport}
-                  sx={{
-                    borderColor: theme.palette.primary.main,
-                    color: theme.palette.primary.main,
-                    '&:hover': {
-                      borderColor: theme.palette.primary.dark,
-                      bgcolor: alpha(theme.palette.primary.main, 0.1),
-                    },
-                  }}
                 >
                   Export
                 </Button>
+
                 {(userData?.role === 'admin' || userData?.role === 'manager') && (
                   <Button
                     variant="contained"
                     startIcon={<AddIcon />}
                     onClick={() => setDynamicDialogOpen(true)}
-                    sx={{
-                      bgcolor: theme.palette.primary.main,
-                      color: '#fff',
-                      '&:hover': {
-                        bgcolor: theme.palette.primary.dark,
-                      },
-                    }}
                   >
                     Add Item
                   </Button>
@@ -392,207 +484,235 @@ const filteredUsers = users.filter(user => {
         </Paper>
       </Zoom>
 
-      {/* Main Table */}
+      {/* Main Content */}
       <Fade in timeout={500}>
-        <TableContainer 
-          component={Paper}
-          sx={{
-            borderRadius: 2,
-            boxShadow: theme.shadows[2],
-            overflow: 'hidden',
-            transition: 'all 0.3s ease-in-out',
-            '&:hover': {
-              boxShadow: theme.shadows[4],
-            },
-          }}
-        >
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell sx={{ 
-                  fontWeight: 600, 
-                  bgcolor: theme.palette.background.default,
-                  width: '200px',
-                  borderBottom: `2px solid ${theme.palette.divider}`,
-                }}>
-                  Staff Member
-                </TableCell>
-                {complianceFields.map(field => (
-                  <TableCell key={field.key} sx={{ 
-                    fontWeight: 600,
-                    bgcolor: theme.palette.background.default,
-                    minWidth: '150px',
-                    borderBottom: `2px solid ${theme.palette.divider}`,
-                  }}>
-                    {field.label}
-                  </TableCell>
-                ))}
-                <TableCell sx={{ 
-                  fontWeight: 600,
-                  bgcolor: theme.palette.background.default,
-                  width: '100px',
-                  borderBottom: `2px solid ${theme.palette.divider}`,
-                }}>
-                  Actions
-                </TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {filteredUsers.map(user => {
-                const userRecord = complianceRecords.find(r => r.userId === user.id);
-                const userStatus = getUserStatus(userRecord);
-                const { color: statusColor, label: statusLabel, icon: statusIcon } = getStatusChipProps(userStatus);
-                const canManage = canManageCompliance(user.id);
-
-                return (
-                  <Zoom in key={user.id} timeout={300}>
-                    <TableRow 
-                      onMouseEnter={() => onHoverChange(user.id)}
-                      onMouseLeave={() => onHoverChange(null)}
-                      sx={{
-                        position: 'relative',
-                        '&:hover': {
-                          bgcolor: theme.palette.action.hover,
-                        },
-                        '&:focus-within': {
-                          bgcolor: alpha(theme.palette.primary.main, 0.1),
-                        },
-                        transition: 'background-color 0.2s ease-in-out',
-                      }}
-                    >
-                      <TableCell>
-                        <Stack spacing={1}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                              {user.name}
-                            </Typography>
-                            <Chip
-                              label={`${statusIcon} ${statusLabel}`}
-                              size="small"
-                              sx={{
-                                bgcolor: `${statusColor}15`,
-                                color: statusColor,
-                                fontWeight: 600,
-                                fontSize: '0.75rem',
-                                transition: 'all 0.2s ease-in-out',
-                                '&:hover': {
-                                  bgcolor: `${statusColor}25`,
-                                },
-                              }}
-                            />
-                          </Box>
-                          <Stack direction="row" spacing={1}>
-                            {user.role && (
-                              <Chip
-                                label={user.role}
-                                size="small"
-                                variant="outlined"
-                                sx={{
-                                  transition: 'all 0.2s ease-in-out',
-                                  '&:hover': {
-                                    bgcolor: alpha(theme.palette.primary.main, 0.1),
-                                  },
-                                }}
-                              />
-                            )}
-                            {user.site && (
-                              <Chip
-                                label={user.site}
-                                size="small"
-                                variant="outlined"
-                                sx={{
-                                  transition: 'all 0.2s ease-in-out',
-                                  '&:hover': {
-                                    bgcolor: alpha(theme.palette.primary.main, 0.1),
-                                  },
-                                }}
-                              />
-                            )}
-                          </Stack>
-                        </Stack>
+        <Box>
+          {isMobile ? (
+            // Mobile View
+            <Stack spacing={2}>
+              {filteredUsers.map(user => renderMobileView(user))}
+            </Stack>
+          ) : (
+            // Desktop View
+            <TableContainer 
+              component={Paper}
+              sx={{
+                borderRadius: 2,
+                boxShadow: theme.shadows[2],
+                overflow: 'auto',
+                transition: 'all 0.3s ease-in-out',
+                '&:hover': {
+                  boxShadow: theme.shadows[4],
+                },
+                maxHeight: 'calc(100vh - 250px)', // Adjust based on your layout
+              }}
+            >
+              <Table size="small" stickyHeader>
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ 
+                      fontWeight: 600, 
+                      bgcolor: theme.palette.background.default,
+                      width: '200px',
+                      borderBottom: `2px solid ${theme.palette.divider}`,
+                      position: 'sticky',
+                      left: 0,
+                      zIndex: 2,
+                    }}>
+                      Staff Member
+                    </TableCell>
+                    {complianceFields.map(field => (
+                      <TableCell key={field.key} sx={{ 
+                        fontWeight: 600,
+                        bgcolor: theme.palette.background.default,
+                        minWidth: '250px',
+                        borderBottom: `2px solid ${theme.palette.divider}`,
+                      }}>
+                        {field.label}
                       </TableCell>
-                      {complianceFields.map(field => (
-                        <ComplianceCell
-                          key={field.key}
-                          record={userRecord}
-                          field={field.key}
-                          user={user}
-                          uploading={uploading}
-                          onEdit={canManage ? onEdit : undefined}
-                          onFileUpload={canManage ? onFileUpload : undefined}
-                          onComplete={canManage ? onComplete : undefined}
-                          onUpdateCompliance={canManage ? onUpdateCompliance : undefined}
-                        />
-                      ))}
-                      <TableCell>
-                        <Stack direction="row" spacing={1}>
-                          {canAddTask(user.id) && onAddTask && (
-                            <Tooltip title="Add Task">
-                              <IconButton
-                                size="small"
-                                onClick={() => onAddTask(user.id)}
-                                sx={{
-                                  color: theme.palette.primary.main,
-                                  '&:hover': {
-                                    bgcolor: alpha(theme.palette.primary.main, 0.1),
-                                  },
-                                }}
-                              >
-                                <TaskIcon />
-                              </IconButton>
-                            </Tooltip>
-                          )}
-                          {canManage && (
-                            <Tooltip title="Edit Compliance">
-                              <IconButton
-                                size="small"
-                                onClick={() => handleAddCompliance(user.id, 'dbsCheck')}
-                                sx={{
-                                  color: theme.palette.primary.main,
-                                  '&:hover': {
-                                    bgcolor: alpha(theme.palette.primary.main, 0.1),
-                                  },
-                                }}
-                              >
-                                <EditIcon />
-                              </IconButton>
-                            </Tooltip>
-                          )}
-                        </Stack>
+                    ))}
+                    <TableCell sx={{ 
+                      fontWeight: 600,
+                      bgcolor: theme.palette.background.default,
+                      width: '100px',
+                      borderBottom: `2px solid ${theme.palette.divider}`,
+                      position: 'sticky',
+                      right: 0,
+                      zIndex: 2,
+                    }}>
+                      Actions
+                    </TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {filteredUsers.map(user => {
+                    const userRecord = complianceRecords.find(r => r.userId === user.id);
+                    const userStatus = getUserStatus(userRecord);
+                    const { color: statusColor, label: statusLabel, icon: statusIcon } = getStatusChipProps(userStatus);
+                    const canManage = canManageCompliance(user.id);
+
+                    return (
+                      <Zoom in key={user.id} timeout={300}>
+                        <TableRow 
+                          onMouseEnter={() => onHoverChange(user.id)}
+                          onMouseLeave={() => onHoverChange(null)}
+                          sx={{
+                            position: 'relative',
+                            '&:hover': {
+                              bgcolor: theme.palette.action.hover,
+                            },
+                            '&:focus-within': {
+                              bgcolor: alpha(theme.palette.primary.main, 0.1),
+                            },
+                            transition: 'background-color 0.2s ease-in-out',
+                          }}
+                        >
+                          <TableCell sx={{
+                            position: 'sticky',
+                            left: 0,
+                            bgcolor: theme.palette.background.paper,
+                            zIndex: 1,
+                          }}>
+                            <Stack spacing={1}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                                  {user.name}
+                                </Typography>
+                                <Chip
+                                  label={`${statusIcon} ${statusLabel}`}
+                                  size="small"
+                                  sx={{
+                                    bgcolor: `${statusColor}15`,
+                                    color: statusColor,
+                                    fontWeight: 600,
+                                    fontSize: '0.75rem',
+                                    transition: 'all 0.2s ease-in-out',
+                                    '&:hover': {
+                                      bgcolor: `${statusColor}25`,
+                                    },
+                                  }}
+                                />
+                              </Box>
+                              <Stack direction="row" spacing={1}>
+                                {user.role && (
+                                  <Chip
+                                    label={user.role}
+                                    size="small"
+                                    variant="outlined"
+                                    sx={{
+                                      transition: 'all 0.2s ease-in-out',
+                                      '&:hover': {
+                                        bgcolor: alpha(theme.palette.primary.main, 0.1),
+                                      },
+                                    }}
+                                  />
+                                )}
+                                {user.site && (
+                                  <Chip
+                                    label={user.site}
+                                    size="small"
+                                    variant="outlined"
+                                    sx={{
+                                      transition: 'all 0.2s ease-in-out',
+                                      '&:hover': {
+                                        bgcolor: alpha(theme.palette.primary.main, 0.1),
+                                      },
+                                    }}
+                                  />
+                                )}
+                              </Stack>
+                            </Stack>
+                          </TableCell>
+                          {complianceFields.map(field => (
+                            <ComplianceCell
+                              key={field.key}
+                              record={userRecord}
+                              field={field.key}
+                              user={user}
+                              uploading={uploading}
+                              onEdit={canManage ? onEdit : undefined}
+                              onFileUpload={canManage ? onFileUpload : undefined}
+                              onComplete={canManage ? onComplete : undefined}
+                              onUpdateCompliance={canManage ? onUpdateCompliance : undefined}
+                            />
+                          ))}
+                          <TableCell sx={{
+                            position: 'sticky',
+                            right: 0,
+                            bgcolor: theme.palette.background.paper,
+                            zIndex: 1,
+                          }}>
+                            <Stack direction="row" spacing={1}>
+                              {canAddTask(user.id) && onAddTask && (
+                                <Tooltip title="Add Task">
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => onAddTask(user.id)}
+                                    sx={{
+                                      color: theme.palette.primary.main,
+                                      '&:hover': {
+                                        bgcolor: alpha(theme.palette.primary.main, 0.1),
+                                      },
+                                    }}
+                                  >
+                                    <TaskIcon />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                              {canManage && (
+                                <Tooltip title="Edit Compliance">
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => handleAddCompliance(user.id, 'dbsCheck')}
+                                    sx={{
+                                      color: theme.palette.primary.main,
+                                      '&:hover': {
+                                        bgcolor: alpha(theme.palette.primary.main, 0.1),
+                                      },
+                                    }}
+                                  >
+                                    <EditIcon />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                            </Stack>
+                          </TableCell>
+                        </TableRow>
+                      </Zoom>
+                    );
+                  })}
+                  {filteredUsers.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={complianceFields.length + 2}>
+                        <Box sx={{ 
+                          p: 4, 
+                          textAlign: 'center',
+                          color: theme.palette.text.secondary
+                        }}>
+                          <Typography>
+                            No staff members found matching the current filters.
+                          </Typography>
+                          <Button
+                            startIcon={<RefreshIcon />}
+                            onClick={() => {
+                              setSearchTerm('');
+                              setStatusFilter('all');
+                              setSiteFilter('all');
+                              setFocusModeEnabled(false);
+                            }}
+                            sx={{ mt: 2 }}
+                          >
+                            Reset Filters
+                          </Button>
+                        </Box>
                       </TableCell>
                     </TableRow>
-                  </Zoom>
-                );
-              })}
-              {filteredUsers.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={complianceFields.length + 2}>
-                    <Box sx={{ 
-                      p: 4, 
-                      textAlign: 'center',
-                      color: theme.palette.text.secondary
-                    }}>
-                      <Typography>
-                        No staff members found matching the current filters.
-                      </Typography>
-                      <Button
-                        startIcon={<RefreshIcon />}
-                        onClick={() => {
-                          setSearchTerm('');
-                          setStatusFilter('all');
-                          setSiteFilter('all');
-                        }}
-                        sx={{ mt: 2 }}
-                      >
-                        Reset Filters
-                      </Button>
-                    </Box>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Box>
       </Fade>
 
       {/* Dialogs */}
@@ -608,6 +728,7 @@ const filteredUsers = users.filter(user => {
           title={`Update ${selectedField.split(/(?=[A-Z])/).join(' ')}`}
           description="Enter compliance details below"
           initialData={getInitialData(selectedUser, selectedField)}
+          isCompetencyAssessment={selectedField === 'albacMat' || selectedField === 'dysphagia' || selectedField === 'manualHandling' || selectedField === 'basicLifeSupport'}
         />
       )}
 

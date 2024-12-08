@@ -1,9 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   TableCell,
   Box,
   IconButton,
-  Tooltip,
   Typography,
   Chip,
   Stack,
@@ -16,7 +15,6 @@ import {
 } from '@mui/material';
 import {
   CheckCircle as ValidIcon,
-  Warning as PendingIcon,
   Error as ExpiredIcon,
   Edit as EditIcon,
   Add as AddIcon,
@@ -26,12 +24,20 @@ import {
   ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
-import { format, isAfter, addDays } from 'date-fns';
+import { format, isAfter } from 'date-fns';
+import { Timestamp } from 'firebase/firestore';
 import { THEME } from '../../theme/colors';
 import { User } from '../../types';
-import { ComplianceItem, StaffCompliance } from '../../types/compliance';
+import { 
+  ComplianceItem, 
+  StaffCompliance, 
+  HealthCheckItem,
+  HealthCheckForm,
+  CompetencyItem 
+} from '../../types/compliance';
 import FileUploadButton from './FileUploadButton';
 import ComplianceInputDialog from './ComplianceInputDialog';
+import HealthCheckDialog from './HealthCheckDialog';
 
 interface ComplianceRecord extends StaffCompliance {
   userId: string;
@@ -45,7 +51,7 @@ interface ComplianceCellProps {
   onEdit?: (userId: string, field: keyof StaffCompliance) => void;
   onFileUpload?: (field: keyof StaffCompliance, file: File) => Promise<void>;
   onComplete?: (userId: string, field: keyof StaffCompliance) => Promise<void>;
-  onUpdateCompliance?: (userId: string, field: keyof StaffCompliance, data: ComplianceItem) => Promise<void>;
+  onUpdateCompliance?: (userId: string, field: keyof StaffCompliance, data: ComplianceItem | HealthCheckItem | CompetencyItem) => Promise<void>;
 }
 
 const ComplianceCell: React.FC<ComplianceCellProps> = ({
@@ -59,39 +65,55 @@ const ComplianceCell: React.FC<ComplianceCellProps> = ({
   onUpdateCompliance,
 }) => {
   const theme = useTheme();
-  const item = record?.[field] as ComplianceItem | undefined;
   const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
+  const [healthCheckDialogOpen, setHealthCheckDialogOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [currentStatus, setCurrentStatus] = useState<'valid' | 'expired'>('expired');
+
+  const isHealthCheck = field === 'healthCheck';
+  const isCompetencyAssessment = field === 'albacMat';
+  const item = record?.[field] as ComplianceItem | HealthCheckItem | CompetencyItem | undefined;
+  const healthCheckItem = isHealthCheck ? item as HealthCheckItem : undefined;
+  const standardComplianceItem = !isHealthCheck ? item as ComplianceItem | CompetencyItem : undefined;
+
+  // Update status whenever item changes
+  useEffect(() => {
+    if (!item?.date) {
+      setCurrentStatus('expired');
+      return;
+    }
+
+    const now = new Date();
+    const expiryDate = item.expiryDate?.toDate();
+
+    if (!expiryDate || isAfter(now, expiryDate)) {
+      setCurrentStatus('expired');
+    } else {
+      setCurrentStatus('valid');
+    }
+  }, [item]);
 
   const getStatusInfo = () => {
     if (!item?.date) {
       return {
         icon: <AddIcon />,
-        color: THEME.warning,
-        label: 'PENDING',
-        description: 'Not started'
+        color: THEME.error,
+        label: 'EXPIRED',
+        description: 'Not started',
+        bgColor: `${THEME.error}15`
       };
     }
 
     const now = new Date();
     const expiryDate = item.expiryDate?.toDate();
-    const warningDate = expiryDate && addDays(expiryDate, -30);
 
-    if (expiryDate && isAfter(now, expiryDate)) {
+    if (!expiryDate || isAfter(now, expiryDate)) {
       return {
         icon: <ExpiredIcon />,
         color: THEME.error,
         label: 'EXPIRED',
-        description: `Expired on ${format(expiryDate, 'dd/MM/yyyy')}`
-      };
-    }
-
-    if (warningDate && isAfter(now, warningDate)) {
-      return {
-        icon: <PendingIcon />,
-        color: THEME.warning,
-        label: 'EXPIRING SOON',
-        description: `Expires on ${format(expiryDate!, 'dd/MM/yyyy')}`
+        description: expiryDate ? `Expired on ${format(expiryDate, 'dd/MM/yyyy')}` : 'No expiry date',
+        bgColor: `${THEME.error}15`
       };
     }
 
@@ -99,38 +121,58 @@ const ComplianceCell: React.FC<ComplianceCellProps> = ({
       icon: <ValidIcon />,
       color: THEME.success,
       label: 'COMPLIANT',
-      description: expiryDate ? `Valid until ${format(expiryDate, 'dd/MM/yyyy')}` : 'No expiry'
+      description: `Valid until ${format(expiryDate, 'dd/MM/yyyy')}`,
+      bgColor: `${THEME.success}15`
     };
   };
 
   const status = getStatusInfo();
 
   const handleClick = () => {
-    if (onEdit) {
+    if (isHealthCheck) {
+      setHealthCheckDialogOpen(true);
+    } else if (onEdit) {
       onEdit(user.id, field);
     }
   };
 
   const handleComplete = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    setCompleteDialogOpen(true);
+    if (isHealthCheck) {
+      setHealthCheckDialogOpen(true);
+    } else {
+      setCompleteDialogOpen(true);
+    }
   };
 
-  const handleSubmitComplete = async (data: ComplianceItem) => {
+  const handleSubmitComplete = async (data: ComplianceItem | CompetencyItem) => {
     if (onUpdateCompliance) {
       await onUpdateCompliance(user.id, field, {
         ...data,
-        status: 'valid'
+        status: data.expiryDate && isAfter(data.expiryDate.toDate(), new Date()) ? 'valid' : 'expired',
       });
       setCompleteDialogOpen(false);
     }
   };
 
-  const showMarkComplete = onUpdateCompliance && (
-    status.label === 'PENDING' || 
-    status.label === 'EXPIRED' || 
-    status.label === 'EXPIRING SOON'
-  );
+  const handleSubmitHealthCheck = async (form: HealthCheckForm) => {
+    if (onUpdateCompliance) {
+      const now = Timestamp.now();
+      const expiryDate = Timestamp.fromDate(new Date(now.toDate().getFullYear() + 1, now.toDate().getMonth(), now.toDate().getDate()));
+      const healthCheckItem: HealthCheckItem = {
+        type: 'healthCheck',
+        date: now,
+        expiryDate,
+        status: 'valid',
+        completed: true,
+        form,
+      };
+      await onUpdateCompliance(user.id, field, healthCheckItem);
+      setHealthCheckDialogOpen(false);
+    }
+  };
+
+  const showMarkComplete = onUpdateCompliance && currentStatus === 'expired';
 
   return (
     <>
@@ -139,6 +181,8 @@ const ComplianceCell: React.FC<ComplianceCellProps> = ({
           p: 1,
           minWidth: { xs: '100%', sm: 250 },
           maxWidth: { xs: '100%', sm: 300 },
+          bgcolor: status.bgColor,
+          transition: 'background-color 0.3s ease',
         }}
       >
         <Card 
@@ -149,6 +193,7 @@ const ComplianceCell: React.FC<ComplianceCellProps> = ({
               transform: 'translateY(-2px)',
               boxShadow: theme.shadows[4],
             },
+            bgcolor: 'transparent',
           }}
         >
           <CardContent>
@@ -158,13 +203,14 @@ const ComplianceCell: React.FC<ComplianceCellProps> = ({
                 label={status.label}
                 size="small"
                 sx={{
-                  bgcolor: `${status.color}15`,
+                  bgcolor: 'white',
                   color: status.color,
                   fontWeight: 600,
                   fontSize: '0.75rem',
                   '& .MuiChip-icon': {
                     color: 'inherit'
-                  }
+                  },
+                  boxShadow: `0 0 0 1px ${status.color}`,
                 }}
               />
               <IconButton
@@ -172,12 +218,24 @@ const ComplianceCell: React.FC<ComplianceCellProps> = ({
                 onClick={() => setExpanded(!expanded)}
                 aria-expanded={expanded}
                 aria-label="show more"
+                sx={{
+                  transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                  transition: 'transform 0.3s ease',
+                }}
               >
                 <ExpandMoreIcon />
               </IconButton>
             </Stack>
 
-            <Typography variant="h6" component="div" gutterBottom>
+            <Typography 
+              variant="subtitle2" 
+              component="div" 
+              gutterBottom
+              sx={{ 
+                fontWeight: 600,
+                color: theme.palette.text.primary,
+              }}
+            >
               {field.split(/(?=[A-Z])/).join(' ')}
             </Typography>
 
@@ -192,6 +250,27 @@ const ComplianceCell: React.FC<ComplianceCellProps> = ({
                 <Typography variant="body2" color={status.color} fontWeight="medium">
                   {status.description}
                 </Typography>
+
+                {isHealthCheck && healthCheckItem?.form && (
+                  <Box sx={{ mt: 1 }}>
+                    <Typography variant="body2" color="text.secondary">
+                      Emergency Contact: {healthCheckItem.form.questions.emergencyContact.name}
+                    </Typography>
+                    {healthCheckItem.form.questions.conditions.length > 0 && (
+                      <Stack direction="row" spacing={0.5} flexWrap="wrap" sx={{ mt: 0.5 }}>
+                        {healthCheckItem.form.questions.conditions.map((condition) => (
+                          <Chip
+                            key={condition}
+                            label={condition}
+                            size="small"
+                            variant="outlined"
+                            sx={{ mt: 0.5 }}
+                          />
+                        ))}
+                      </Stack>
+                    )}
+                  </Box>
+                )}
 
                 {item?.evidence && (
                   <Link
@@ -268,14 +347,26 @@ const ComplianceCell: React.FC<ComplianceCellProps> = ({
         </Card>
       </TableCell>
 
-      <ComplianceInputDialog
-        open={completeDialogOpen}
-        onClose={() => setCompleteDialogOpen(false)}
-        onSubmit={handleSubmitComplete}
-        title={`Complete ${field.split(/(?=[A-Z])/).join(' ')}`}
-        description="Enter completion details below"
-        initialData={item}
-      />
+      {!isHealthCheck && (
+        <ComplianceInputDialog
+          open={completeDialogOpen}
+          onClose={() => setCompleteDialogOpen(false)}
+          onSubmit={handleSubmitComplete}
+          title={`Complete ${field.split(/(?=[A-Z])/).join(' ')}`}
+          description="Enter completion details below"
+          initialData={standardComplianceItem}
+          isCompetencyAssessment={isCompetencyAssessment}
+        />
+      )}
+
+      {isHealthCheck && (
+        <HealthCheckDialog
+          open={healthCheckDialogOpen}
+          onClose={() => setHealthCheckDialogOpen(false)}
+          onSubmit={handleSubmitHealthCheck}
+          initialData={healthCheckItem?.form}
+        />
+      )}
     </>
   );
 };

@@ -7,9 +7,10 @@ import {
   query,
   where,
   getDocs,
+  getDoc,
 } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { addDays, addYears } from 'date-fns';
+import { addDays, addYears, isAfter } from 'date-fns';
 import { db } from '../firebase/config';
 import { useAuth } from './AuthContext';
 import { useNotifications } from './NotificationContext';
@@ -26,11 +27,14 @@ import {
   DynamicItemUpdate,
   ComplianceStateUpdater,
   ComplianceStateUpdate,
+  HealthCheckForm,
+  CompetencyAssessment,
+  ComplianceEvidence,
 } from '../types/compliance';
 
 interface ComplianceContextType {
   updateCompliance: (userId: string, data: StaffCompliance) => Promise<void>;
-  updateHealthCheck: (userId: string, answers: { [key: string]: string | boolean | number }) => Promise<void>;
+  updateHealthCheck: (userId: string, form: HealthCheckForm) => Promise<void>;
   signAgreement: (userId: string, agreementType: 'supervisionAgreement' | 'beneficiaryOnFile') => Promise<void>;
   uploadEvidence: (userId: string, field: keyof StaffCompliance, file: File) => Promise<void>;
   addDynamicItem: (userId: string, item: Omit<DynamicComplianceItem, 'date' | 'expiryDate' | 'status'>) => Promise<void>;
@@ -38,13 +42,14 @@ interface ComplianceContextType {
   removeDynamicItem: (userId: string, itemId: string) => Promise<void>;
   uploadDynamicEvidence: (userId: string, itemId: string, file: File) => Promise<void>;
   completeItem: (userId: string, field: keyof StaffCompliance) => Promise<void>;
+  updateCompetencyAssessment: (userId: string, assessment: CompetencyAssessment) => Promise<void>;
   staffCompliance?: StaffCompliance;
   allStaffCompliance: StaffCompliance[];
   loading: boolean;
   error: string | null;
 }
 
-const ComplianceContext = createContext<ComplianceContextType | undefined>(undefined);
+export const ComplianceContext = createContext<ComplianceContextType | undefined>(undefined);
 
 export const useCompliance = () => {
   const context = useContext(ComplianceContext);
@@ -90,25 +95,34 @@ const calculateDynamicExpiryDate = (
   }
 };
 
-function isComplianceItem(value: any): value is ComplianceItem {
-  return value && typeof value === 'object' && 'type' in value && value.type === 'compliance';
-}
+const initializeComplianceStatus = (record: StaffCompliance): StaffCompliance => {
+  const now = new Date();
+  const updatedRecord = { ...record };
 
-function isHealthCheckItem(value: any): value is HealthCheckItem {
-  return value && typeof value === 'object' && 'type' in value && value.type === 'healthCheck';
-}
+  // Helper function to check if an item is expired
+  const isItemExpired = (item: any) => {
+    if (!item || !item.expiryDate) return true;
+    return isAfter(now, item.expiryDate.toDate());
+  };
 
-function isSignableItem(value: any): value is SignableItem {
-  return value && typeof value === 'object' && 'type' in value && value.type === 'signable';
-}
+  // Update status for each compliance field
+  Object.entries(updatedRecord).forEach(([key, value]) => {
+    if (value && typeof value === 'object' && 'status' in value) {
+      (value as any).status = isItemExpired(value) ? 'expired' : 'valid';
+    }
+  });
 
-function isCompetencyItem(value: any): value is CompetencyItem {
-  return value && typeof value === 'object' && 'type' in value && value.type === 'competency';
-}
+  // Update dynamic items
+  if (updatedRecord.dynamicItems) {
+    Object.entries(updatedRecord.dynamicItems).forEach(([key, item]) => {
+      if (item) {
+        item.status = isItemExpired(item) ? 'expired' : 'valid';
+      }
+    });
+  }
 
-function isDynamicComplianceItem(value: any): value is DynamicComplianceItem {
-  return value && typeof value === 'object' && 'type' in value && value.type === 'dynamic';
-}
+  return updatedRecord;
+};
 
 export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [staffCompliance, setStaffCompliance] = useState<StaffCompliance>();
@@ -118,22 +132,6 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const { currentUser, userData, isAdmin } = useAuth();
   const { notify } = useNotifications();
   const { addTask } = useTask();
-
-  const updateStaffCompliance = (updater: ComplianceStateUpdater) => {
-    setStaffCompliance((prev: StaffCompliance | undefined) => {
-      const updated = updater(prev);
-      if (!updated) return prev;
-      return updated;
-    });
-  };
-
-  const updateAllStaffCompliance = (userId: string, updater: ComplianceStateUpdater) => {
-    setAllStaffCompliance((prev: StaffCompliance[]) =>
-      prev.map((compliance) =>
-        compliance.userId === userId ? updater(compliance) || compliance : compliance
-      )
-    );
-  };
 
   useEffect(() => {
     if (!currentUser || !userData) return;
@@ -158,17 +156,17 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
 
         const snapshot = await getDocs(complianceQuery);
-        const complianceData = snapshot.docs.map(
-          (doc) =>
-            ({
-              userId: doc.id,
-              ...doc.data(),
-            } as StaffCompliance)
-        );
+        const complianceData = snapshot.docs.map(doc => ({
+          userId: doc.id,
+          ...doc.data(),
+        } as StaffCompliance));
 
-        setAllStaffCompliance(complianceData);
+        // Initialize status for all records
+        const initializedData = complianceData.map(record => initializeComplianceStatus(record));
 
-        const ownCompliance = complianceData.find((c) => c.userId === currentUser.uid);
+        setAllStaffCompliance(initializedData);
+
+        const ownCompliance = initializedData.find((c) => c.userId === currentUser.uid);
         if (ownCompliance) {
           setStaffCompliance(ownCompliance);
         }
@@ -185,139 +183,125 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     loadCompliance();
   }, [currentUser, userData, isAdmin]);
 
-  const uploadEvidence = async (userId: string, field: keyof StaffCompliance, file: File) => {
-    try {
-      const storage = getStorage();
-      const storageRef = ref(storage, `compliance/${userId}/${field}/${file.name}`);
-      await uploadBytes(storageRef, file);
-      const downloadUrl = await getDownloadURL(storageRef);
+const updateCompliance = async (userId: string, data: StaffCompliance) => {
+  try {
+    const complianceRef = doc(collection(db, 'compliance'), userId);
+    
+    // Get current document data
+    const currentDoc = await getDoc(complianceRef);
+    const currentData = currentDoc.data() as StaffCompliance || {};
 
-      const evidence = {
-        fileUrl: downloadUrl,
-        fileName: file.name,
-        uploadedAt: Timestamp.now(),
-      };
+    // Prepare update data
+    const updateData: { [key: string]: ComplianceItemType } = {};
 
-      const currentField = staffCompliance?.[field];
-      if (!isComplianceItem(currentField)) {
-        throw new Error('Invalid compliance item');
-      }
+    Object.entries(data).forEach(([key, value]) => {
+      if (key === 'userId' || !value) return;
 
-      const updatedField: ComplianceItem = {
-        ...currentField,
-        evidence,
-      };
+      const field = key as keyof StaffCompliance;
+      const currentItem = currentData[field] as ComplianceItemType | undefined;
 
-      const updateData: { [key: string]: ComplianceItemType } = {
-        [field]: updatedField,
-      };
+      if (key === 'dbsCheck' && value.type === 'compliance') {
+        updateData[field] = {
+          ...(currentItem || {}),
+          type: 'compliance' as const,
+          date: value.date,
+          expiryDate: value.date ? Timestamp.fromDate(calculateDBSExpiryDate(value.date)) : null,
+          status: value.expiryDate && isAfter(value.expiryDate.toDate(), new Date()) ? ('valid' as const) : ('expired' as const),
+          notes: value.notes || '',
+          evidence: currentItem?.evidence,
+        } as ComplianceItem;
+      } else if (
+        [
+          'healthCheck',
+          'supervisionAgreement',
+          'beneficiaryOnFile',
+          'stressRiskAssessment',
+          'albacMat',
+          'dysphagia',
+          'manualHandling',
+          'basicLifeSupport',
+          'donningAndDoffing',
+          'cprScenario',
+        ].includes(key)
+      ) {
+        const baseUpdate = {
+          ...(currentItem || {}),
+          date: value.date,
+          expiryDate: value.date ? Timestamp.fromDate(calculateExpiryDate(value.date)) : null,
+          status: value.expiryDate && isAfter(value.expiryDate.toDate(), new Date()) ? ('valid' as const) : ('expired' as const),
+          notes: value.notes || '',
+          evidence: currentItem?.evidence,
+        };
 
-      const complianceRef = doc(collection(db, 'compliance'), userId);
-      await setDoc(complianceRef, updateData, { merge: true });
-
-      if (userId === currentUser?.uid) {
-        updateStaffCompliance((prev: StaffCompliance | undefined) =>
-          prev ? { ...prev, ...updateData } : undefined
-        );
-      }
-
-      updateAllStaffCompliance(userId, (prev: StaffCompliance | undefined) =>
-        prev ? { ...prev, ...updateData } : undefined
-      );
-    } catch (error) {
-      console.error('Error uploading evidence:', error);
-      throw error;
-    }
-  };
-
-  const updateCompliance = async (userId: string, data: StaffCompliance) => {
-    try {
-      const updateData: { [key: string]: ComplianceItemType | DynamicItemUpdate } = {};
-
-      Object.entries(data).forEach(([key, value]) => {
-        if (key === 'userId' || !value) return;
-
-        const field = key as keyof StaffCompliance;
-
-        if (key === 'dbsCheck' && isComplianceItem(value)) {
-          const { type: _, ...restValue } = value;
-          updateData[String(field)] = {
-            type: 'compliance',
-            ...restValue,
-            expiryDate: value.date
-              ? Timestamp.fromDate(calculateDBSExpiryDate(value.date))
-              : null,
-            status: 'valid',
-          } as ComplianceItem;
-        } else if (
-          [
-            'healthCheck',
-            'supervisionAgreement',
-            'beneficiaryOnFile',
-            'stressRiskAssessment',
-            'albacMat',
-            'donningAndDoffing',
-            'cprScenario',
-          ].includes(key) &&
-          isComplianceItem(value)
-        ) {
-          const { type: _, ...restValue } = value;
-          const baseUpdate = {
-            ...restValue,
-            expiryDate: value.date ? Timestamp.fromDate(calculateExpiryDate(value.date)) : null,
-            status: 'valid',
-          };
-
-          if (key === 'supervisionAgreement' || key === 'beneficiaryOnFile') {
-            updateData[String(field)] = {
-              type: 'signable',
-              ...baseUpdate,
-              signed: true,
-            } as SignableItem;
-          } else if (key === 'healthCheck') {
-            updateData[String(field)] = {
-              type: 'healthCheck',
-              ...baseUpdate,
-              completed: true,
-            } as HealthCheckItem;
-          } else if (key === 'albacMat') {
-            updateData[String(field)] = {
-              type: 'competency',
-              ...baseUpdate,
-            } as CompetencyItem;
-          } else {
-            updateData[String(field)] = {
-              type: 'compliance',
-              ...baseUpdate,
-            } as ComplianceItem;
-          }
+        if (key === 'supervisionAgreement' || key === 'beneficiaryOnFile') {
+          updateData[field] = {
+            ...baseUpdate,
+            type: 'signable' as const,
+            signed: true,
+          } as SignableItem;
+        } else if (key === 'healthCheck') {
+          updateData[field] = {
+            ...baseUpdate,
+            type: 'healthCheck' as const,
+            completed: true,
+            form: (currentItem as HealthCheckItem)?.form,
+          } as HealthCheckItem;
+        } else if (['albacMat', 'dysphagia', 'manualHandling', 'basicLifeSupport'].includes(key)) {
+          updateData[field] = {
+            ...baseUpdate,
+            type: 'competency' as const,
+            assessedBy: value.assessedBy || '',
+            score: value.score || 0,
+            assessment: (currentItem as CompetencyItem)?.assessment,
+          } as CompetencyItem;
         } else {
-          updateData[String(field)] = value as ComplianceItemType;
+          updateData[field] = {
+            ...baseUpdate,
+            type: 'compliance' as const,
+          } as ComplianceItem;
         }
-      });
-
-      const complianceRef = doc(collection(db, 'compliance'), userId);
-      await setDoc(complianceRef, updateData, { merge: true });
-
-      if (userId === currentUser?.uid) {
-        updateStaffCompliance((prev: StaffCompliance | undefined) =>
-          prev ? { ...prev, ...updateData } : undefined
-        );
       }
+    });
 
-      updateAllStaffCompliance(userId, (prev: StaffCompliance | undefined) =>
-        prev ? { ...prev, ...updateData } : undefined
-      );
-    } catch (error) {
-      console.error('Error updating compliance:', error);
-      throw error;
+    // Update Firestore
+    await setDoc(complianceRef, updateData, { merge: true });
+
+    // Fetch updated document to ensure we have the latest state
+    const updatedDoc = await getDoc(complianceRef);
+    const updatedData = updatedDoc.data() as StaffCompliance;
+
+    // Update local state with the fetched data
+    if (userId === currentUser?.uid) {
+      setStaffCompliance(prev => {
+        if (!prev) return undefined;
+        return initializeComplianceStatus({ ...prev, ...updatedData });
+      });
     }
-  };
 
-  const updateHealthCheck = async (
-    userId: string,
-    answers: { [key: string]: string | boolean | number }
-  ) => {
+    // Update all staff compliance
+    setAllStaffCompliance(prev => 
+      prev.map(compliance => 
+        compliance.userId === userId
+          ? initializeComplianceStatus({ ...compliance, ...updatedData })
+          : compliance
+      )
+    );
+
+    await notify({
+      userId,
+      type: 'system',
+      title: 'Compliance Updated',
+      message: 'Your compliance records have been updated',
+      priority: 'medium',
+    });
+
+  } catch (error) {
+    console.error('Error updating compliance:', error);
+    throw error;
+  }
+};
+
+  const updateHealthCheck = async (userId: string, form: HealthCheckForm) => {
     try {
       const now = Timestamp.now();
       const healthCheckItem: HealthCheckItem = {
@@ -325,26 +309,42 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         date: now,
         expiryDate: Timestamp.fromDate(calculateExpiryDate(now)),
         completed: true,
-        answers,
+        form,
         status: 'valid',
       };
 
-      const updateData: { [key: string]: ComplianceItemType } = {
+      const updateData = {
         healthCheck: healthCheckItem,
       };
 
+      // Update Firestore first
       const complianceRef = doc(collection(db, 'compliance'), userId);
       await setDoc(complianceRef, updateData, { merge: true });
 
+      // Update local state after successful Firestore update
       if (userId === currentUser?.uid) {
-        updateStaffCompliance((prev: StaffCompliance | undefined) =>
-          prev ? { ...prev, ...updateData } : undefined
-        );
+        setStaffCompliance(prev => {
+          if (!prev) return undefined;
+          const updated = { ...prev, ...updateData };
+          return initializeComplianceStatus(updated);
+        });
       }
 
-      updateAllStaffCompliance(userId, (prev: StaffCompliance | undefined) =>
-        prev ? { ...prev, ...updateData } : undefined
+      setAllStaffCompliance(prev => 
+        prev.map(compliance => 
+          compliance.userId === userId
+            ? initializeComplianceStatus({ ...compliance, ...updateData })
+            : compliance
+        )
       );
+
+      await notify({
+        userId,
+        type: 'system',
+        title: 'Health Check Completed',
+        message: 'Your health check has been updated',
+        priority: 'medium',
+      });
     } catch (error) {
       console.error('Error updating health check:', error);
       throw error;
@@ -365,24 +365,71 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         status: 'valid',
       };
 
-      const updateData: { [key: string]: ComplianceItemType } = {
+      const updateData = {
         [agreementType]: signableItem,
       };
 
+      // Update Firestore first
       const complianceRef = doc(collection(db, 'compliance'), userId);
       await setDoc(complianceRef, updateData, { merge: true });
 
+      // Update local state after successful Firestore update
       if (userId === currentUser?.uid) {
-        updateStaffCompliance((prev: StaffCompliance | undefined) =>
-          prev ? { ...prev, ...updateData } : undefined
-        );
+        setStaffCompliance(prev => {
+          if (!prev) return undefined;
+          const updated = { ...prev, ...updateData };
+          return initializeComplianceStatus(updated);
+        });
       }
 
-      updateAllStaffCompliance(userId, (prev: StaffCompliance | undefined) =>
-        prev ? { ...prev, ...updateData } : undefined
+      setAllStaffCompliance(prev => 
+        prev.map(compliance => 
+          compliance.userId === userId
+            ? initializeComplianceStatus({ ...compliance, ...updateData })
+            : compliance
+        )
       );
+
+      await notify({
+        userId,
+        type: 'supervision',
+        title: 'Agreement Signed',
+        message: `${agreementType.split(/(?=[A-Z])/).join(' ')} has been signed`,
+        priority: 'medium',
+      });
     } catch (error) {
       console.error('Error signing agreement:', error);
+      throw error;
+    }
+  };
+
+  const uploadEvidence = async (userId: string, field: keyof StaffCompliance, file: File) => {
+    try {
+      const storage = getStorage();
+      const storageRef = ref(storage, `compliance/${userId}/${field}/${file.name}`);
+      await uploadBytes(storageRef, file);
+      const downloadUrl = await getDownloadURL(storageRef);
+
+      const evidence: ComplianceEvidence = {
+        fileUrl: downloadUrl,
+        fileName: file.name,
+        uploadedAt: Timestamp.now(),
+        uploadedBy: currentUser?.uid || '',
+        fileSize: file.size,
+        fileType: file.type,
+      };
+
+      const currentItem = staffCompliance?.[field] as ComplianceItem | undefined;
+      if (!currentItem) return;
+
+      const updatedItem = {
+        ...currentItem,
+        evidence,
+      };
+
+      await updateCompliance(userId, { [field]: updatedItem } as StaffCompliance);
+    } catch (error) {
+      console.error('Error uploading evidence:', error);
       throw error;
     }
   };
@@ -400,20 +447,49 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         ...item,
         date: now,
         expiryDate,
-        status: 'pending',
+        status: isAfter(expiryDate.toDate(), new Date()) ? 'valid' : 'expired',
         type: 'dynamic',
       };
 
-      const updateData: DynamicItemUpdate = {
+      const updateData = {
         dynamicItems: {
           [item.title]: newItem,
         },
       };
 
+      // Update Firestore first
       const complianceRef = doc(collection(db, 'compliance'), userId);
-      await setDoc(complianceRef, updateData, { merge: true });
+      await setDoc(complianceRef, { dynamicItems: updateData.dynamicItems }, { merge: true });
 
-      // Create task
+      // Update local state after successful Firestore update
+      if (userId === currentUser?.uid) {
+        setStaffCompliance(prev => {
+          if (!prev) return undefined;
+          const updated = {
+            ...prev,
+            dynamicItems: {
+              ...prev.dynamicItems,
+              ...updateData.dynamicItems,
+            },
+          };
+          return initializeComplianceStatus(updated);
+        });
+      }
+
+      setAllStaffCompliance(prev => 
+        prev.map(compliance => 
+          compliance.userId === userId
+            ? initializeComplianceStatus({
+                ...compliance,
+                dynamicItems: {
+                  ...compliance.dynamicItems,
+                  ...updateData.dynamicItems,
+                },
+              })
+            : compliance
+        )
+      );
+
       await addTask({
         title: `Complete ${item.title}`,
         description: item.description,
@@ -424,7 +500,6 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         assignedTo: userId,
       });
 
-      // Create system notification
       await createNotification(
         userId,
         'task',
@@ -433,7 +508,6 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         '/compliance'
       );
 
-      // Show UI notification
       await notify({
         userId,
         type: 'task',
@@ -441,32 +515,6 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         message: `You have been assigned: ${item.title}`,
         priority: 'medium',
       });
-
-      if (userId === currentUser?.uid) {
-        updateStaffCompliance((prev: StaffCompliance | undefined) =>
-          prev
-            ? {
-                ...prev,
-                dynamicItems: {
-                  ...prev.dynamicItems,
-                  [item.title]: newItem,
-                },
-              }
-            : undefined
-        );
-      }
-
-      updateAllStaffCompliance(userId, (prev: StaffCompliance | undefined) =>
-        prev
-          ? {
-              ...prev,
-              dynamicItems: {
-                ...prev.dynamicItems,
-                [item.title]: newItem,
-              },
-            }
-          : undefined
-      );
     } catch (error) {
       console.error('Error adding dynamic compliance item:', error);
       throw error;
@@ -485,33 +533,59 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const updatedItem: DynamicComplianceItem = {
         ...currentItem,
         ...updates,
+        status: updates.expiryDate 
+          ? isAfter(updates.expiryDate.toDate(), new Date()) ? 'valid' : 'expired'
+          : currentItem.expiryDate 
+            ? isAfter(currentItem.expiryDate.toDate(), new Date()) ? 'valid' : 'expired'
+            : 'valid'
       };
 
-      const updateData: DynamicItemUpdate = {
+      const updateData = {
         dynamicItems: {
           [itemId]: updatedItem,
         },
       };
 
+      // Update Firestore first
       const complianceRef = doc(collection(db, 'compliance'), userId);
-      await setDoc(complianceRef, updateData, { merge: true });
+      await setDoc(complianceRef, { dynamicItems: updateData.dynamicItems }, { merge: true });
 
-      const updateState = (prev: StaffCompliance | undefined) => {
-        if (!prev?.dynamicItems) return prev;
-        return {
-          ...prev,
-          dynamicItems: {
-            ...prev.dynamicItems,
-            [itemId]: updatedItem,
-          },
-        };
-      };
-
+      // Update local state after successful Firestore update
       if (userId === currentUser?.uid) {
-        updateStaffCompliance(updateState);
+        setStaffCompliance(prev => {
+          if (!prev) return undefined;
+          const updated = {
+            ...prev,
+            dynamicItems: {
+              ...prev.dynamicItems,
+              ...updateData.dynamicItems,
+            },
+          };
+          return initializeComplianceStatus(updated);
+        });
       }
 
-      updateAllStaffCompliance(userId, updateState);
+      setAllStaffCompliance(prev => 
+        prev.map(compliance => 
+          compliance.userId === userId
+            ? initializeComplianceStatus({
+                ...compliance,
+                dynamicItems: {
+                  ...compliance.dynamicItems,
+                  ...updateData.dynamicItems,
+                },
+              })
+            : compliance
+        )
+      );
+
+      await notify({
+        userId,
+        type: 'system',
+        title: 'Dynamic Item Updated',
+        message: `${itemId} has been updated`,
+        priority: 'low',
+      });
     } catch (error) {
       console.error('Error updating dynamic compliance item:', error);
       throw error;
@@ -520,29 +594,52 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const removeDynamicItem = async (userId: string, itemId: string) => {
     try {
+      const currentState = allStaffCompliance.find(c => c.userId === userId);
+      if (!currentState?.dynamicItems) return;
+
+      const { [itemId]: removed, ...remainingItems } = currentState.dynamicItems;
+
+      // Update Firestore first
       const complianceRef = doc(collection(db, 'compliance'), userId);
       await setDoc(
         complianceRef,
         {
-          [`dynamicItems.${itemId}`]: null,
+          dynamicItems: remainingItems
         },
         { merge: true }
       );
 
-      const updateState = (prev: StaffCompliance | undefined) => {
-        if (!prev?.dynamicItems) return prev;
-        const { [itemId]: removed, ...rest } = prev.dynamicItems;
-        return {
-          ...prev,
-          dynamicItems: rest,
-        };
-      };
-
+      // Update local state after successful Firestore update
       if (userId === currentUser?.uid) {
-        updateStaffCompliance(updateState);
+        setStaffCompliance(prev => {
+          if (!prev) return undefined;
+          const { [itemId]: removed, ...remaining } = prev.dynamicItems || {};
+          const updated = {
+            ...prev,
+            dynamicItems: remaining,
+          };
+          return initializeComplianceStatus(updated);
+        });
       }
 
-      updateAllStaffCompliance(userId, updateState);
+      setAllStaffCompliance(prev => 
+        prev.map(compliance => {
+          if (compliance.userId !== userId) return compliance;
+          const { [itemId]: removed, ...remaining } = compliance.dynamicItems || {};
+          return initializeComplianceStatus({
+            ...compliance,
+            dynamicItems: remaining,
+          });
+        })
+      );
+
+      await notify({
+        userId,
+        type: 'system',
+        title: 'Dynamic Item Removed',
+        message: `${itemId} has been removed`,
+        priority: 'low',
+      });
     } catch (error) {
       console.error('Error removing dynamic compliance item:', error);
       throw error;
@@ -556,10 +653,13 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       await uploadBytes(storageRef, file);
       const downloadUrl = await getDownloadURL(storageRef);
 
-      const evidence = {
+      const evidence: ComplianceEvidence = {
         fileUrl: downloadUrl,
         fileName: file.name,
         uploadedAt: Timestamp.now(),
+        uploadedBy: currentUser?.uid || '',
+        fileSize: file.size,
+        fileType: file.type,
       };
 
       await updateDynamicItem(userId, itemId, { evidence });
@@ -584,9 +684,7 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           status: 'valid',
           signed: true,
         };
-        updateData = {
-          [String(field)]: signableItem,
-        };
+        updateData = { [field]: signableItem };
       } else if (field === 'healthCheck') {
         const healthCheckItem: HealthCheckItem = {
           type: 'healthCheck',
@@ -595,19 +693,17 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           status: 'valid',
           completed: true,
         };
-        updateData = {
-          [String(field)]: healthCheckItem,
-        };
-      } else if (field === 'albacMat') {
+        updateData = { [field]: healthCheckItem };
+      } else if (field === 'albacMat' || field === 'dysphagia' || field === 'manualHandling' || field === 'basicLifeSupport') {
         const competencyItem: CompetencyItem = {
           type: 'competency',
           date: now,
           expiryDate,
           status: 'valid',
+          assessedBy: currentUser?.displayName || '',
+          score: 5,
         };
-        updateData = {
-          [String(field)]: competencyItem,
-        };
+        updateData = { [field]: competencyItem };
       } else if (field !== 'userId' && field !== 'site' && field !== 'dynamicItems') {
         const complianceItem: ComplianceItem = {
           type: 'compliance',
@@ -615,13 +711,29 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           expiryDate,
           status: 'valid',
         };
-        updateData = {
-          [String(field)]: complianceItem,
-        };
+        updateData = { [field]: complianceItem };
       }
 
+      // Update Firestore first
       const complianceRef = doc(collection(db, 'compliance'), userId);
       await setDoc(complianceRef, updateData, { merge: true });
+
+      // Update local state after successful Firestore update
+      if (userId === currentUser?.uid) {
+        setStaffCompliance(prev => {
+          if (!prev) return undefined;
+          const updated = { ...prev, ...updateData };
+          return initializeComplianceStatus(updated);
+        });
+      }
+
+      setAllStaffCompliance(prev => 
+        prev.map(compliance => 
+          compliance.userId === userId
+            ? initializeComplianceStatus({ ...compliance, ...updateData })
+            : compliance
+        )
+      );
 
       // Create notification
       await createNotification(
@@ -632,7 +744,7 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         '/compliance'
       );
 
-      // Show UI notification
+      // Notify user
       await notify({
         userId,
         type: 'task',
@@ -640,18 +752,58 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         message: `${String(field).split(/(?=[A-Z])/).join(' ')} has been marked as complete`,
         priority: 'low',
       });
-
-      if (userId === currentUser?.uid) {
-        updateStaffCompliance((prev: StaffCompliance | undefined) =>
-          prev ? { ...prev, ...updateData } : undefined
-        );
-      }
-
-      updateAllStaffCompliance(userId, (prev: StaffCompliance | undefined) =>
-        prev ? { ...prev, ...updateData } : undefined
-      );
     } catch (error) {
       console.error('Error completing compliance item:', error);
+      throw error;
+    }
+  };
+
+  const updateCompetencyAssessment = async (userId: string, assessment: CompetencyAssessment) => {
+    try {
+      const competencyItem: CompetencyItem = {
+        type: 'competency',
+        date: assessment.assessmentDate,
+        expiryDate: assessment.expiryDate,
+        status: isAfter(assessment.expiryDate.toDate(), new Date()) ? 'valid' : 'expired',
+        assessedBy: assessment.assessedBy,
+        score: assessment.score,
+        assessment,
+      };
+
+      const updateData = {
+        [assessment.type]: competencyItem,
+      };
+
+      // Update Firestore first
+      const complianceRef = doc(collection(db, 'compliance'), userId);
+      await setDoc(complianceRef, updateData, { merge: true });
+
+      // Update local state after successful Firestore update
+      if (userId === currentUser?.uid) {
+        setStaffCompliance(prev => {
+          if (!prev) return undefined;
+          const updated = { ...prev, ...updateData };
+          return initializeComplianceStatus(updated);
+        });
+      }
+
+      setAllStaffCompliance(prev => 
+        prev.map(compliance => 
+          compliance.userId === userId
+            ? initializeComplianceStatus({ ...compliance, ...updateData })
+            : compliance
+        )
+      );
+
+      await notify({
+        userId,
+        type: 'training',
+        title: 'Competency Assessment Updated',
+        message: `${assessment.type} assessment has been updated`,
+        priority: 'medium',
+      });
+    } catch (error) {
+      console.error('Error updating competency assessment:', error);
       throw error;
     }
   };
@@ -666,6 +818,7 @@ export const ComplianceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     removeDynamicItem,
     uploadDynamicEvidence,
     completeItem,
+    updateCompetencyAssessment,
     staffCompliance,
     allStaffCompliance,
     loading,

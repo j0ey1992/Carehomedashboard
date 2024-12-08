@@ -14,7 +14,6 @@ import {
 } from '@mui/material';
 import {
   CheckCircle as ValidIcon,
-  Warning as PendingIcon,
   Error as ExpiredIcon,
   Info as InfoIcon,
   Download as DownloadIcon,
@@ -28,7 +27,6 @@ interface ComplianceStats {
   total: number;
   completionRate: number;
   expired: number;
-  pending: number;
 }
 
 interface ComplianceHeaderProps {
@@ -219,7 +217,7 @@ const ComplianceHeader: React.FC<ComplianceHeaderProps> = ({ stats, userRole, on
       </Fade>
 
       <Grid container spacing={3}>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={12} sm={6} md={4}>
           <StatCard
             title="Valid Records"
             value={stats.upToDate}
@@ -230,18 +228,7 @@ const ComplianceHeader: React.FC<ComplianceHeaderProps> = ({ stats, userRole, on
             index={0}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <StatCard
-            title="Pending Records"
-            value={stats.pending}
-            total={stats.total}
-            icon={<PendingIcon />}
-            color={THEME.warning}
-            helpText="Staff members with pending compliance tasks"
-            index={1}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid item xs={12} sm={6} md={4}>
           <StatCard
             title="Expired Records"
             value={stats.expired}
@@ -249,11 +236,11 @@ const ComplianceHeader: React.FC<ComplianceHeaderProps> = ({ stats, userRole, on
             icon={<ExpiredIcon />}
             color={THEME.error}
             helpText="Staff members with expired compliance records"
-            index={2}
+            index={1}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Zoom in style={{ transitionDelay: '300ms' }}>
+        <Grid item xs={12} md={4}>
+          <Zoom in style={{ transitionDelay: '200ms' }}>
             <Paper
               elevation={2}
               sx={{

@@ -21,6 +21,7 @@ import {
   Fade,
   alpha,
   IconButton,
+  Rating,
 } from '@mui/material';
 import {
   DatePicker,
@@ -28,32 +29,35 @@ import {
 } from '@mui/x-date-pickers';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import { addMonths, addYears, isAfter, isBefore } from 'date-fns';
-import { ComplianceItem } from '../../types/compliance';
+import { ComplianceItem, CompetencyItem } from '../../types/compliance';
 import { Timestamp } from 'firebase/firestore';
 import { THEME } from '../../theme/colors';
 import {
   CalendarToday as CalendarIcon,
   Info as InfoIcon,
   CheckCircle as ValidIcon,
-  Warning as PendingIcon,
   Error as ExpiredIcon,
   Close as CloseIcon,
+  Star as StarIcon,
 } from '@mui/icons-material';
 
 interface ComplianceInputDialogProps {
   open: boolean;
   onClose: () => void;
-  onSubmit: (data: ComplianceItem) => Promise<void>;
+  onSubmit: (data: ComplianceItem | CompetencyItem) => Promise<void>;
   title: string;
   description?: string;
-  initialData?: Partial<ComplianceItem>;
+  initialData?: Partial<ComplianceItem> | Partial<CompetencyItem>;
+  isCompetencyAssessment?: boolean;
 }
 
 interface ComplianceFormData {
   date: Date | null;
   expiryDate: Date | null;
-  status: 'valid' | 'expired' | 'pending';
+  status: 'valid' | 'expired';
   notes?: string;
+  assessedBy?: string;
+  score?: number;
 }
 
 const QuickExpiryButton: React.FC<{
@@ -94,38 +98,63 @@ const ComplianceInputDialog: React.FC<ComplianceInputDialogProps> = ({
   title,
   description,
   initialData,
+  isCompetencyAssessment = false,
 }) => {
   const [formData, setFormData] = useState<ComplianceFormData>({
     date: initialData?.date?.toDate() || null,
     expiryDate: initialData?.expiryDate?.toDate() || null,
-    status: initialData?.status || 'pending',
+    status: initialData?.status || 'valid',
     notes: initialData?.notes || '',
+    assessedBy: (initialData as CompetencyItem)?.assessedBy || '',
+    score: (initialData as CompetencyItem)?.score || 0,
   });
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
 
+  // Update form data when dialog opens or initial data changes
   useEffect(() => {
     if (open) {
+      const status = initialData?.status || 'valid';
       setFormData({
         date: initialData?.date?.toDate() || null,
         expiryDate: initialData?.expiryDate?.toDate() || null,
-        status: initialData?.status || 'pending',
+        status,
         notes: initialData?.notes || '',
+        assessedBy: (initialData as CompetencyItem)?.assessedBy || '',
+        score: (initialData as CompetencyItem)?.score || 0,
       });
       setError(null);
       setProgress(0);
     }
   }, [open, initialData]);
 
+  // Update progress bar
   useEffect(() => {
     let completed = 0;
     if (formData.date) completed++;
-    if (formData.status !== 'pending') completed++;
+    if (formData.status === 'valid') completed++;
     if (formData.notes?.trim()) completed++;
-    setProgress((completed / 3) * 100);
-  }, [formData]);
+    if (isCompetencyAssessment) {
+      if (formData.assessedBy?.trim()) completed++;
+      if (formData.score && formData.score > 0) completed++;
+      setProgress((completed / 5) * 100);
+    } else {
+      setProgress((completed / 3) * 100);
+    }
+  }, [formData, isCompetencyAssessment]);
+
+  // Update status based on expiry date
+  useEffect(() => {
+    if (formData.expiryDate) {
+      const now = new Date();
+      const status = isAfter(formData.expiryDate, now) ? 'valid' : 'expired';
+      if (status !== formData.status) {
+        setFormData(prev => ({ ...prev, status }));
+      }
+    }
+  }, [formData.expiryDate]);
 
   const validateForm = (): boolean => {
     if (!formData.date) {
@@ -140,7 +169,17 @@ const ComplianceInputDialog: React.FC<ComplianceInputDialogProps> = ({
 
     if (formData.expiryDate && isBefore(formData.expiryDate, new Date())) {
       if (formData.status === 'valid') {
-        setError('Status cannot be valid when item is expired');
+        setFormData(prev => ({ ...prev, status: 'expired' }));
+      }
+    }
+
+    if (isCompetencyAssessment) {
+      if (!formData.assessedBy?.trim()) {
+        setError('Assessor name is required');
+        return false;
+      }
+      if (!formData.score || formData.score <= 0) {
+        setError('Assessment score is required');
         return false;
       }
     }
@@ -148,27 +187,43 @@ const ComplianceInputDialog: React.FC<ComplianceInputDialogProps> = ({
     return true;
   };
 
-  const handleSubmit = async () => {
-    if (!validateForm()) return;
+const handleSubmit = async () => {
+  if (!validateForm()) return;
 
-    setLoading(true);
-    try {
-      const complianceItem: ComplianceItem = {
-        type: 'compliance',
-        date: Timestamp.fromDate(formData.date!),
-        expiryDate: formData.expiryDate ? Timestamp.fromDate(formData.expiryDate) : null,
-        status: formData.status,
-        notes: formData.notes,
+  setLoading(true);
+  try {
+    const status = formData.expiryDate && isAfter(formData.expiryDate, new Date()) ? 'valid' as const : 'expired' as const;
+    
+    const baseData = {
+      type: 'compliance' as const,
+      date: Timestamp.fromDate(formData.date!),
+      expiryDate: formData.expiryDate ? Timestamp.fromDate(formData.expiryDate) : null,
+      status,
+      notes: formData.notes,
+    };
+
+    if (isCompetencyAssessment) {
+      const competencyItem: CompetencyItem = {
+        ...baseData,
+        type: 'competency',
+        assessedBy: formData.assessedBy!,
+        score: formData.score!,
       };
-
+      await onSubmit(competencyItem);
+    } else {
+      const complianceItem: ComplianceItem = {
+        ...baseData,
+        type: 'compliance',
+      };
       await onSubmit(complianceItem);
-      onClose();
-    } catch (error) {
-      setError('Failed to save compliance data');
-    } finally {
-      setLoading(false);
     }
-  };
+    onClose();
+  } catch (error) {
+    setError('Failed to save compliance data');
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleQuickExpiry = (duration: 'sixMonths' | 'oneYear' | 'threeYears') => {
     if (!formData.date) return;
@@ -188,10 +243,11 @@ const ComplianceInputDialog: React.FC<ComplianceInputDialogProps> = ({
         break;
     }
 
+    const status = isAfter(expiryDate, new Date()) ? 'valid' : 'expired';
     setFormData(prev => ({
       ...prev,
       expiryDate,
-      status: isAfter(expiryDate, new Date()) ? 'valid' : 'expired',
+      status,
     }));
   };
 
@@ -199,10 +255,8 @@ const ComplianceInputDialog: React.FC<ComplianceInputDialogProps> = ({
     switch (status) {
       case 'valid':
         return THEME.success;
-      case 'expired':
-        return THEME.error;
       default:
-        return THEME.warning;
+        return THEME.error;
     }
   };
 
@@ -210,10 +264,8 @@ const ComplianceInputDialog: React.FC<ComplianceInputDialogProps> = ({
     switch (status) {
       case 'valid':
         return <ValidIcon />;
-      case 'expired':
-        return <ExpiredIcon />;
       default:
-        return <PendingIcon />;
+        return <ExpiredIcon />;
     }
   };
 
@@ -298,7 +350,7 @@ const ComplianceInputDialog: React.FC<ComplianceInputDialogProps> = ({
                 status: date ? (
                   prev.expiryDate && isBefore(prev.expiryDate, new Date()) ? 
                   'expired' : 'valid'
-                ) : 'pending'
+                ) : 'valid'
               }))}
               slotProps={{
                 textField: {
@@ -371,13 +423,55 @@ const ComplianceInputDialog: React.FC<ComplianceInputDialogProps> = ({
             </Stack>
           </Box>
 
+          {isCompetencyAssessment && (
+            <>
+              <TextField
+                label="Assessed By"
+                value={formData.assessedBy}
+                onChange={(e) => setFormData(prev => ({ ...prev, assessedBy: e.target.value }))}
+                required
+                sx={{
+                  '& .MuiOutlinedInput-root': {
+                    transition: 'all 0.2s ease-in-out',
+                    '&:hover': {
+                      '& fieldset': {
+                        borderColor: THEME.info,
+                      },
+                    },
+                  },
+                }}
+              />
+
+              <Box>
+                <Typography variant="subtitle2" gutterBottom>
+                  Assessment Score
+                </Typography>
+                <Rating
+                  value={formData.score}
+                  onChange={(_, newValue) => setFormData(prev => ({ ...prev, score: newValue || 0 }))}
+                  max={5}
+                  icon={<StarIcon fontSize="large" />}
+                  emptyIcon={<StarIcon fontSize="large" />}
+                  sx={{
+                    '& .MuiRating-iconFilled': {
+                      color: THEME.info,
+                    },
+                    '& .MuiRating-iconHover': {
+                      color: alpha(THEME.info, 0.7),
+                    },
+                  }}
+                />
+              </Box>
+            </>
+          )}
+
           <FormControl fullWidth>
             <InputLabel>Status</InputLabel>
             <Select
               value={formData.status}
               onChange={(e) => setFormData(prev => ({ 
                 ...prev, 
-                status: e.target.value as 'valid' | 'expired' | 'pending' 
+                status: e.target.value as 'valid' | 'expired'
               }))}
               label="Status"
               sx={{
@@ -401,20 +495,6 @@ const ComplianceInputDialog: React.FC<ComplianceInputDialogProps> = ({
                     sx={{ 
                       bgcolor: `${THEME.success}15`,
                       color: THEME.success,
-                      fontWeight: 600,
-                    }}
-                  />
-                </Stack>
-              </MenuItem>
-              <MenuItem value="pending">
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <PendingIcon sx={{ color: THEME.warning }} />
-                  <Chip 
-                    label="PENDING" 
-                    size="small"
-                    sx={{ 
-                      bgcolor: `${THEME.warning}15`,
-                      color: THEME.warning,
                       fontWeight: 600,
                     }}
                   />
