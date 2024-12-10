@@ -440,9 +440,6 @@ const findOrCreateUser = async (
       contractedHours: contractedHours || 0,
       annualLeave: annualLeave || 0,
       sickness: sickness || 0,
-      phoneNumber: phoneNumber,
-      password: password,
-      site: site,
       preferences: {
         preferredShifts: ['7:30-14:30', '14:30-21:30'],
         unavailableDates: [],
@@ -458,6 +455,11 @@ const findOrCreateUser = async (
         feedbackScore: 100
       }
     };
+
+    // Add optional fields only if they have values
+    if (phoneNumber) newUser.phoneNumber = phoneNumber;
+    if (password) newUser.password = password;
+    if (site) newUser.site = site;
 
     // Create the user document in the users collection with proper date conversion
     await setDoc(doc(db, 'users', userId), {

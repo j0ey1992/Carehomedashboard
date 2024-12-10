@@ -1,12 +1,12 @@
 {
   "name": "care-home-dashboard-scripts",
   "version": "1.0.0",
-  "description": "Scripts for Care Home Dashboard",
+  "description": "Admin scripts for Care Home Dashboard",
+  "main": "deleteAllData.js",
   "scripts": {
-    "create-staff": "node createStaff.js",
-    "migrate-users": "node migrateUsersToStaff.js"
+    "delete-all": "node deleteAllData.js"
   },
   "dependencies": {
-    "firebase-admin": "^11.0.0"
+    "firebase-admin": "^11.11.1"
   }
 }

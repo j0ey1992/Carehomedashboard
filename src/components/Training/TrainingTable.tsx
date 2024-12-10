@@ -22,6 +22,9 @@ import {
   Mail as MailIcon,
   Schedule as ScheduleIcon,
   Warning as WarningIcon,
+  CheckCircle as ValidIcon,
+  Error as ExpiredIcon,
+  AccessTime as ExpiringIcon,
 } from '@mui/icons-material';
 import { TrainingRecord } from '../../types';
 import { formatDate } from '../../utils/dateUtils';
@@ -50,38 +53,81 @@ const TrainingTable: React.FC<TrainingTableProps> = ({
 }) => {
   const theme = useTheme();
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'expired':
-        return theme.palette.error.main;
-      case 'expiring':
-        return theme.palette.warning.main;
-      case 'valid':
-        return theme.palette.success.main;
-      default:
-        return theme.palette.grey[500];
+  const getStatusInfo = (record: TrainingRecord) => {
+    const now = new Date();
+    const expiryDate = new Date(record.expiryDate);
+    const thirtyDaysFromNow = new Date();
+    thirtyDaysFromNow.setDate(now.getDate() + 30);
+
+    if (expiryDate < now) {
+      return {
+        status: 'expired',
+        color: theme.palette.error.main,
+        icon: <ExpiredIcon />,
+        label: 'Expired',
+        urgency: 3
+      };
+    } else if (expiryDate <= thirtyDaysFromNow) {
+      return {
+        status: 'expiring',
+        color: theme.palette.warning.main,
+        icon: <ExpiringIcon />,
+        label: 'Expiring Soon',
+        urgency: 2
+      };
+    } else {
+      return {
+        status: 'valid',
+        color: theme.palette.success.main,
+        icon: <ValidIcon />,
+        label: 'Valid',
+        urgency: 1
+      };
     }
   };
 
-  const getCompletionColor = (percentage: number) => {
-    if (percentage >= 90) return theme.palette.success.main;
-    if (percentage >= 70) return theme.palette.warning.main;
-    return theme.palette.error.main;
+  const calculateCompletion = (record: TrainingRecord) => {
+    const statusInfo = getStatusInfo(record);
+    switch (statusInfo.status) {
+      case 'valid':
+        return 100;
+      case 'expiring':
+        return 70;
+      case 'expired':
+        return 0;
+      default:
+        return 0;
+    }
   };
 
-  const calculateCompletion = (record: TrainingRecord) => {
-    // This is a simplified calculation - adjust based on your actual requirements
-    const totalRequired = 100; // Example: total required training points
-    const completed = record.status === 'valid' ? 100 : 
-                     record.status === 'expiring' ? 70 : 0;
-    return completed;
-  };
+  // Sort records by urgency
+  const sortedRecords = [...records].sort((a, b) => {
+    const statusA = getStatusInfo(a).urgency;
+    const statusB = getStatusInfo(b).urgency;
+    return statusB - statusA;
+  });
 
   return (
-    <TableContainer component={Paper} sx={{ borderRadius: 2, boxShadow: 2 }}>
+    <TableContainer 
+      component={Paper} 
+      sx={{ 
+        borderRadius: 2, 
+        boxShadow: 2,
+        '& .MuiTableCell-root': {
+          fontSize: '1rem',
+          padding: '16px',
+        },
+      }}
+    >
       <Table>
         <TableHead>
-          <TableRow sx={{ bgcolor: 'background.default' }}>
+          <TableRow sx={{ 
+            bgcolor: theme.palette.grey[100],
+            '& .MuiTableCell-head': {
+              fontWeight: 600,
+              color: theme.palette.text.primary,
+            }
+          }}>
             <TableCell padding="checkbox">
               <Checkbox
                 indeterminate={selectedRecords.length > 0 && selectedRecords.length < records.length}
@@ -92,17 +138,16 @@ const TrainingTable: React.FC<TrainingTableProps> = ({
             <TableCell>Staff Member</TableCell>
             <TableCell>Course</TableCell>
             <TableCell>Status</TableCell>
-            <TableCell>Completion</TableCell>
+            <TableCell>Progress</TableCell>
             <TableCell>Expiry Date</TableCell>
             <TableCell>Actions</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
-          {records.map((record) => {
+          {sortedRecords.map((record) => {
+            const statusInfo = getStatusInfo(record);
             const completion = calculateCompletion(record);
             const isSelected = selectedRecords.includes(record.id);
-            const statusColor = getStatusColor(record.status);
-            const completionColor = getCompletionColor(completion);
 
             return (
               <TableRow
@@ -115,6 +160,7 @@ const TrainingTable: React.FC<TrainingTableProps> = ({
                   '&:hover': {
                     backgroundColor: alpha(theme.palette.primary.main, 0.05),
                   },
+                  borderLeft: `4px solid ${statusInfo.color}`,
                 }}
               >
                 <TableCell padding="checkbox">
@@ -128,15 +174,24 @@ const TrainingTable: React.FC<TrainingTableProps> = ({
                     {record.staffName}
                   </Typography>
                 </TableCell>
-                <TableCell>{record.courseTitle}</TableCell>
+                <TableCell>
+                  <Typography variant="body1">
+                    {record.courseTitle}
+                  </Typography>
+                </TableCell>
                 <TableCell>
                   <Chip
-                    label={record.status}
-                    size="small"
+                    icon={statusInfo.icon}
+                    label={statusInfo.label}
+                    size="medium"
                     sx={{
-                      bgcolor: alpha(statusColor, 0.1),
-                      color: statusColor,
-                      fontWeight: 500,
+                      bgcolor: alpha(statusInfo.color, 0.1),
+                      color: statusInfo.color,
+                      fontWeight: 600,
+                      fontSize: '0.875rem',
+                      '& .MuiChip-icon': {
+                        color: 'inherit'
+                      }
                     }}
                   />
                 </TableCell>
@@ -146,30 +201,35 @@ const TrainingTable: React.FC<TrainingTableProps> = ({
                       variant="determinate"
                       value={completion}
                       sx={{
-                        height: 8,
-                        borderRadius: 4,
-                        bgcolor: alpha(completionColor, 0.1),
+                        height: 10,
+                        borderRadius: 5,
+                        bgcolor: alpha(statusInfo.color, 0.1),
                         '& .MuiLinearProgress-bar': {
-                          bgcolor: completionColor,
-                          borderRadius: 4,
+                          bgcolor: statusInfo.color,
+                          borderRadius: 5,
                         },
                       }}
                     />
-                    <Typography variant="caption" color="textSecondary">
+                    <Typography 
+                      variant="caption" 
+                      sx={{ 
+                        color: statusInfo.color,
+                        fontWeight: 500,
+                        fontSize: '0.875rem'
+                      }}
+                    >
                       {`${completion}% Complete`}
                     </Typography>
                   </Stack>
                 </TableCell>
                 <TableCell>
                   <Stack direction="row" spacing={1} alignItems="center">
-                    {record.status !== 'valid' && (
-                      <WarningIcon
-                        fontSize="small"
-                        sx={{ color: statusColor }}
-                      />
-                    )}
+                    {statusInfo.icon}
                     <Typography
-                      color={record.status !== 'valid' ? statusColor : 'textPrimary'}
+                      sx={{
+                        color: statusInfo.color,
+                        fontWeight: 500
+                      }}
                     >
                       {formatDate(record.expiryDate)}
                     </Typography>
@@ -177,40 +237,60 @@ const TrainingTable: React.FC<TrainingTableProps> = ({
                 </TableCell>
                 <TableCell>
                   <Stack direction="row" spacing={1}>
-                    <Tooltip title="Edit Record">
+                    <Tooltip title="Edit Record" arrow>
                       <IconButton
-                        size="small"
+                        size="medium"
                         onClick={() => onEdit(record)}
-                        sx={{ color: theme.palette.primary.main }}
+                        sx={{ 
+                          color: theme.palette.primary.main,
+                          '&:hover': {
+                            backgroundColor: alpha(theme.palette.primary.main, 0.1)
+                          }
+                        }}
                       >
-                        <EditIcon fontSize="small" />
+                        <EditIcon />
                       </IconButton>
                     </Tooltip>
-                    <Tooltip title="Send Reminder">
+                    <Tooltip title="Send Reminder" arrow>
                       <IconButton
-                        size="small"
+                        size="medium"
                         onClick={() => onSendReminder(record)}
-                        sx={{ color: theme.palette.info.main }}
+                        sx={{ 
+                          color: theme.palette.info.main,
+                          '&:hover': {
+                            backgroundColor: alpha(theme.palette.info.main, 0.1)
+                          }
+                        }}
                       >
-                        <MailIcon fontSize="small" />
+                        <MailIcon />
                       </IconButton>
                     </Tooltip>
-                    <Tooltip title="Schedule Reminder">
+                    <Tooltip title="Schedule Reminder" arrow>
                       <IconButton
-                        size="small"
+                        size="medium"
                         onClick={() => onScheduleReminder(record)}
-                        sx={{ color: theme.palette.warning.main }}
+                        sx={{ 
+                          color: theme.palette.warning.main,
+                          '&:hover': {
+                            backgroundColor: alpha(theme.palette.warning.main, 0.1)
+                          }
+                        }}
                       >
-                        <ScheduleIcon fontSize="small" />
+                        <ScheduleIcon />
                       </IconButton>
                     </Tooltip>
-                    <Tooltip title="Delete Record">
+                    <Tooltip title="Delete Record" arrow>
                       <IconButton
-                        size="small"
+                        size="medium"
                         onClick={() => onDelete(record.id)}
-                        sx={{ color: theme.palette.error.main }}
+                        sx={{ 
+                          color: theme.palette.error.main,
+                          '&:hover': {
+                            backgroundColor: alpha(theme.palette.error.main, 0.1)
+                          }
+                        }}
                       >
-                        <DeleteIcon fontSize="small" />
+                        <DeleteIcon />
                       </IconButton>
                     </Tooltip>
                   </Stack>

@@ -22,12 +22,4 @@ export const auth = getAuth(app);
 export const storage = getStorage(app);
 export const functions = getFunctions(app);
 
-// Enable local emulator if in development
-if (process.env.NODE_ENV === 'development') {
-  // connectFirestoreEmulator(db, 'localhost', 8080);
-  // connectAuthEmulator(auth, 'http://localhost:9099');
-  // connectStorageEmulator(storage, 'localhost', 9199);
-  // connectFunctionsEmulator(functions, 'localhost', 5001);
-}
-
 export default app;

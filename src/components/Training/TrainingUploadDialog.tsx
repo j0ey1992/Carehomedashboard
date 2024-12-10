@@ -16,6 +16,7 @@ import {
   ListItem,
   ListItemText,
   Collapse,
+  Alert,
 } from '@mui/material';
 import {
   CloudUpload as UploadIcon,
@@ -29,6 +30,7 @@ import { extractStaffFromExcel } from '../../utils/excelParser';
 import { StaffInfo } from '../../utils/excelParser';
 import { NewUserData } from '../../types';
 import { ShiftRole } from '../../types/rota';
+import { createBulkAuthAccounts } from '../../services/authService';
 
 interface TrainingUploadDialogProps {
   open: boolean;
@@ -84,6 +86,10 @@ const TrainingUploadDialog: React.FC<TrainingUploadDialogProps> = ({
   const [staffMembers, setStaffMembers] = useState<StaffInfo[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [userDataMap, setUserDataMap] = useState<{ [key: string]: NewUserData }>({});
+  const [authResults, setAuthResults] = useState<{
+    success: string[];
+    failed: { userId: string; error: string }[];
+  } | null>(null);
 
   const handleFileSelect = async (selectedFile: File | null) => {
     if (!selectedFile) {
@@ -140,7 +146,12 @@ const TrainingUploadDialog: React.FC<TrainingUploadDialogProps> = ({
     setProgressPercentage(0);
 
     try {
-      // Upload for each staff member that needs info
+      // First create auth accounts for new staff members
+      const authResult = await createBulkAuthAccounts(staffMembers, userDataMap);
+      setAuthResults(authResult);
+      setProgressPercentage(50);
+
+      // Then upload training data for each staff member
       for (const staff of staffMembers) {
         if (staff.needsInfo) {
           const userData = userDataMap[staff.name];
@@ -153,7 +164,11 @@ const TrainingUploadDialog: React.FC<TrainingUploadDialogProps> = ({
       }
 
       setProgressPercentage(100);
-      onClose();
+      
+      // Only close if there were no auth failures
+      if (authResult.failed.length === 0) {
+        onClose();
+      }
     } catch (error) {
       setError((error as Error).message);
     } finally {
@@ -170,6 +185,7 @@ const TrainingUploadDialog: React.FC<TrainingUploadDialogProps> = ({
       setActiveStep(0);
       setExpanded(null);
       setUserDataMap({});
+      setAuthResults(null);
       onClose();
     }
   };
@@ -280,7 +296,32 @@ const TrainingUploadDialog: React.FC<TrainingUploadDialogProps> = ({
 
         {error && (
           <Box sx={{ mt: 2 }}>
-            <Typography color="error">{error}</Typography>
+            <Alert severity="error">{error}</Alert>
+          </Box>
+        )}
+
+        {authResults && (
+          <Box sx={{ mt: 2 }}>
+            {authResults.success.length > 0 && (
+              <Alert severity="success" sx={{ mb: 1 }}>
+                Successfully created {authResults.success.length} auth accounts
+              </Alert>
+            )}
+            {authResults.failed.length > 0 && (
+              <Alert severity="error">
+                Failed to create {authResults.failed.length} auth accounts:
+                <List>
+                  {authResults.failed.map(failure => (
+                    <ListItem key={failure.userId}>
+                      <ListItemText
+                        primary={failure.userId}
+                        secondary={failure.error}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              </Alert>
+            )}
           </Box>
         )}
 

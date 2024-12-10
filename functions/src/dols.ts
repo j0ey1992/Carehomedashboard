@@ -1,4 +1,5 @@
-import * as functions from 'firebase-functions';
+import { onSchedule } from 'firebase-functions/v2/scheduler';
+import { onObjectFinalized } from 'firebase-functions/v2/storage';
 import * as admin from 'firebase-admin';
 import * as sgMail from '@sendgrid/mail';
 import { Twilio } from 'twilio';
@@ -6,8 +7,8 @@ import { toDate } from './utils';
 
 // Initialize Twilio
 const twilioClient = new Twilio(
-  functions.config().twilio.account_sid,
-  functions.config().twilio.auth_token
+  process.env.TWILIO_ACCOUNT_SID || '',
+  process.env.TWILIO_AUTH_TOKEN || ''
 );
 
 interface DoLSRecord {
@@ -37,10 +38,13 @@ interface UserData {
 }
 
 // Check for expiring DoLS
-export const checkExpiringDoLS = functions.pubsub
-  .schedule('0 9 * * *') // Run daily at 9 AM
-  .timeZone('Europe/London')
-  .onRun(async (context) => {
+export const checkExpiringDoLS = onSchedule(
+  {
+    schedule: '0 9 * * *', // Run daily at 9 AM
+    timeZone: 'Europe/London',
+    memory: '1GiB',
+  },
+  async () => {
     const now = admin.firestore.Timestamp.now();
     const thirtyDaysFromNow = new Date();
     thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
@@ -111,11 +115,18 @@ export const checkExpiringDoLS = functions.pubsub
           // Send email if enabled
           if (manager.notificationPreferences.email) {
             try {
+              const emailContent = `<p>Dear ${manager.name},</p>
+              <p>${notificationData.message}</p>
+              <p>Please take necessary action to ensure compliance.</p>
+              <p>Expiry Date: ${expiryDate.toLocaleDateString()}</p>`;
+
               await sgMail.send({
                 to: manager.email,
-                from: functions.config().sendgrid.from_email,
+                from: process.env.SENDGRID_FROM_EMAIL || '',
                 subject: notificationData.title,
-                templateId: functions.config().sendgrid[`dols_${reminderType}_template`],
+                text: notificationData.message,
+                html: emailContent,
+                templateId: process.env[`SENDGRID_DOLS_${reminderType.toUpperCase()}_TEMPLATE_ID`],
                 dynamicTemplateData: {
                   managerName: manager.name,
                   residentName: dols.residentName,
@@ -134,7 +145,7 @@ export const checkExpiringDoLS = functions.pubsub
               await twilioClient.messages.create({
                 body: `${notificationData.title}\n\n${notificationData.message}`,
                 to: manager.phoneNumber,
-                from: functions.config().twilio.phone_number,
+                from: process.env.TWILIO_PHONE_NUMBER || '',
               });
             } catch (error) {
               console.error('Error sending SMS:', error);
@@ -162,7 +173,8 @@ export const checkExpiringDoLS = functions.pubsub
     await Promise.all(notifications.map(notification =>
       admin.firestore().collection('notifications').add(notification)
     ));
-  });
+  }
+);
 
 function createNotificationMessage(
   reminderType: 'initial' | 'followup' | 'final',
@@ -191,18 +203,21 @@ function createNotificationMessage(
 }
 
 // Process DoLS document uploads
-export const processDoLSDocumentUpload = functions.storage
-  .object()
-  .onFinalize(async (object) => {
-    if (!object.name?.startsWith('dols/')) return;
+export const processDoLSDocumentUpload = onObjectFinalized(
+  {
+    bucket: process.env.STORAGE_BUCKET,
+    memory: '1GiB',
+  },
+  async (event) => {
+    if (!event.data.name?.startsWith('dols/')) return;
 
-    const filePath = object.name;
+    const filePath = event.data.name;
     const fileName = filePath.split('/').pop();
     const dolsId = filePath.split('/')[1]; // Assuming path format: dols/{dolsId}/{fileName}
 
     if (!fileName || !dolsId) return;
 
-    const downloadUrl = `https://storage.googleapis.com/${object.bucket}/${filePath}`;
+    const downloadUrl = `https://storage.googleapis.com/${event.data.bucket}/${filePath}`;
 
     // Update DoLS record with new document
     await admin
@@ -225,4 +240,5 @@ export const processDoLSDocumentUpload = functions.storage
       uploadDate: admin.firestore.FieldValue.serverTimestamp(),
       downloadUrl,
     });
-  });
+  }
+);

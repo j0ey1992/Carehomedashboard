@@ -1,4 +1,4 @@
-import * as functions from 'firebase-functions';
+import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import * as admin from 'firebase-admin';
 
 interface FirebaseAuthError {
@@ -6,19 +6,30 @@ interface FirebaseAuthError {
   message: string;
 }
 
+interface UserData {
+  email: string;
+  name: string;
+  authCreated?: boolean;
+}
+
 // Function to create Firebase Auth account for new users
-export const createAuthAccount = functions.firestore
-  .document('users/{userId}')
-  .onCreate(async (snap, context) => {
-    const userData = snap.data();
-    const userId = context.params.userId;
+export const createAuthAccount = onDocumentCreated(
+  'users/{userId}',
+  async (event) => {
+    const userData = event.data?.data() as UserData;
+    const userId = event.params.userId;
+
+    if (!userData || !userData.email || !userData.name) {
+      console.error('Missing required user data');
+      return;
+    }
 
     try {
       // Check if user already exists in Auth
       try {
         await admin.auth().getUser(userId);
         console.log('Auth user already exists:', userId);
-        return null;
+        return;
       } catch (error) {
         // User doesn't exist in Auth, proceed with creation
         const authError = error as FirebaseAuthError;
@@ -38,13 +49,13 @@ export const createAuthAccount = functions.firestore
           await admin.auth().generatePasswordResetLink(userData.email);
 
           // Update user document with auth status
-          await snap.ref.update({
+          await event.data?.ref.update({
             authCreated: true,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
 
           console.log('Created auth account for:', userId);
-          return null;
+          return;
         }
         throw error;
       }
@@ -52,4 +63,5 @@ export const createAuthAccount = functions.firestore
       console.error('Error creating auth account:', error);
       throw error;
     }
-  });
+  }
+);

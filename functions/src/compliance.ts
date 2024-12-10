@@ -1,4 +1,5 @@
-import * as functions from 'firebase-functions';
+import { onSchedule } from 'firebase-functions/v2/scheduler';
+import { onDocumentCreated, onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import * as admin from 'firebase-admin';
 import * as sgMail from '@sendgrid/mail';
 
@@ -113,9 +114,11 @@ const checkItemExpiry = async (
       // Send email notification
       const msg = {
         to: staffEmail,
-        from: 'notifications@carehome.com',
+        from: process.env.SENDGRID_FROM_EMAIL || 'notifications@carehome.com',
         subject: `${itemName} Expiring Soon`,
-        templateId: 'compliance-expiry-notification',
+        templateId: process.env.SENDGRID_COMPLIANCE_TEMPLATE_ID,
+        text: `Your ${itemName} will expire in ${daysUntilExpiry} days. Please contact your manager to arrange renewal.`,
+        html: `<p>Your ${itemName} will expire in ${daysUntilExpiry} days. Please contact your manager to arrange renewal.</p>`,
         dynamicTemplateData: {
           staffName,
           itemName,
@@ -130,9 +133,13 @@ const checkItemExpiry = async (
 };
 
 // Daily check for expiring compliance items
-export const checkComplianceExpiry = functions.pubsub
-  .schedule('0 0 * * *') // Run daily at midnight
-  .onRun(async (context) => {
+export const checkComplianceExpiry = onSchedule(
+  {
+    schedule: '0 0 * * *', // Run daily at midnight
+    timeZone: 'Europe/London',
+    memory: '1GiB',
+  },
+  async () => {
     try {
       const now = admin.firestore.Timestamp.now();
       const thirtyDaysFromNow = admin.firestore.Timestamp.fromMillis(
@@ -199,15 +206,18 @@ export const checkComplianceExpiry = functions.pubsub
       console.error('Error checking compliance expiry:', error);
       throw error;
     }
-  });
+  }
+);
 
 // Handle compliance record updates
-export const onComplianceUpdate = functions.firestore
-  .document('compliance/{userId}')
-  .onUpdate(async (change, context) => {
-    const newData = change.after.data() as StaffCompliance;
-    const previousData = change.before.data() as StaffCompliance;
-    const userId = context.params.userId;
+export const onComplianceUpdate = onDocumentUpdated(
+  'compliance/{userId}',
+  async (event) => {
+    const newData = event.data?.after.data() as StaffCompliance;
+    const previousData = event.data?.before.data() as StaffCompliance;
+    const userId = event.params.userId;
+
+    if (!newData || !previousData) return;
 
     try {
       const batch = db.batch();
@@ -269,14 +279,18 @@ export const onComplianceUpdate = functions.firestore
       console.error('Error handling compliance update:', error);
       throw error;
     }
-  });
+  }
+);
 
 // Create initial compliance record for new users
-export const onUserCreated = functions.firestore
-  .document('users/{userId}')
-  .onCreate(async (snap, context) => {
-    const userData = snap.data() as StaffData;
-    const userId = context.params.userId;
+export const onUserCreated = onDocumentCreated(
+  'users/{userId}',
+  async (event) => {
+    const userData = event.data?.data() as StaffData;
+    const userId = event.params.userId;
+
+    if (!userData) return;
+
     const now = admin.firestore.Timestamp.now();
 
     try {
@@ -395,4 +409,5 @@ export const onUserCreated = functions.firestore
       console.error('Error creating initial compliance record:', error);
       throw error;
     }
-  });
+  }
+);

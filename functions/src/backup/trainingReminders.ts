@@ -1,4 +1,4 @@
-import * as functions from 'firebase-functions';
+import { onSchedule } from 'firebase-functions/v2/scheduler';
 import * as admin from 'firebase-admin';
 import * as sgMail from '@sendgrid/mail';
 import { Twilio } from 'twilio';
@@ -6,8 +6,8 @@ import { toDate } from './utils';
 
 // Initialize Twilio
 const twilioClient = new Twilio(
-  functions.config().twilio.account_sid,
-  functions.config().twilio.auth_token
+  process.env.TWILIO_ACCOUNT_SID || '',
+  process.env.TWILIO_AUTH_TOKEN || ''
 );
 
 interface TrainingRecord {
@@ -32,10 +32,13 @@ interface UserData {
 }
 
 // Check for expiring training records
-export const checkExpiringTraining = functions.pubsub
-  .schedule('0 9 * * *') // Run daily at 9 AM
-  .timeZone('Europe/London')
-  .onRun(async (context) => {
+export const checkExpiringTraining = onSchedule(
+  {
+    schedule: '0 9 * * *', // Run daily at 9 AM
+    timeZone: 'Europe/London',
+    memory: '1GiB',
+  },
+  async () => {
     const now = admin.firestore.Timestamp.now();
     
     // Define notification thresholds
@@ -145,9 +148,9 @@ export const checkExpiringTraining = functions.pubsub
             try {
               await sgMail.send({
                 to: user.email,
-                from: functions.config().sendgrid.from_email,
+                from: process.env.SENDGRID_FROM_EMAIL || '',
                 subject: notificationData.title,
-                templateId: functions.config().sendgrid[`training_${reminderType}_template`],
+                templateId: process.env[`SENDGRID_TRAINING_${reminderType.toUpperCase()}_TEMPLATE_ID`],
                 dynamicTemplateData: {
                   subject: notificationData.title,
                   staffName: training.staffName,
@@ -167,7 +170,7 @@ export const checkExpiringTraining = functions.pubsub
               await twilioClient.messages.create({
                 body: `${notificationData.title}\n\n${notificationData.message}`,
                 to: user.phoneNumber,
-                from: functions.config().twilio.phone_number,
+                from: process.env.TWILIO_PHONE_NUMBER || '',
               });
             } catch (error) {
               console.error('Error sending SMS:', error);
@@ -193,7 +196,8 @@ export const checkExpiringTraining = functions.pubsub
     };
 
     await admin.firestore().collection('reports').add(managementReport);
-  });
+  }
+);
 
 function createNotificationMessage(
   reminderType: 'initial' | 'followup14' | 'followup7' | 'expired' | 'final',

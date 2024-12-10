@@ -1,4 +1,5 @@
-import * as functions from 'firebase-functions';
+import { onSchedule } from 'firebase-functions/v2/scheduler';
+import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import * as sgMail from '@sendgrid/mail';
 import { Twilio } from 'twilio';
@@ -6,8 +7,8 @@ import { toDate } from './utils';
 
 // Initialize Twilio
 const twilioClient = new Twilio(
-  functions.config().twilio.account_sid,
-  functions.config().twilio.auth_token
+  process.env.TWILIO_ACCOUNT_SID || '',
+  process.env.TWILIO_AUTH_TOKEN || ''
 );
 
 interface ScheduledMessage {
@@ -54,10 +55,13 @@ interface MassMessageData {
 }
 
 // Process scheduled messages
-export const processScheduledMessages = functions.pubsub
-  .schedule('*/15 * * * *') // Run every 15 minutes
-  .timeZone('Europe/London')
-  .onRun(async (context) => {
+export const processScheduledMessages = onSchedule(
+  {
+    schedule: '*/15 * * * *', // Run every 15 minutes
+    timeZone: 'Europe/London',
+    memory: '1GiB',
+  },
+  async () => {
     const now = new Date();
     const query = await admin
       .firestore()
@@ -151,7 +155,7 @@ export const processScheduledMessages = functions.pubsub
               if (message.template) {
                 await sgMail.send({
                   to: user.email,
-                  from: functions.config().sendgrid.from_email,
+                  from: process.env.SENDGRID_FROM_EMAIL || '',
                   subject: processedSubject,
                   templateId: message.template,
                   dynamicTemplateData: {
@@ -163,7 +167,7 @@ export const processScheduledMessages = functions.pubsub
               } else {
                 await sgMail.send({
                   to: user.email,
-                  from: functions.config().sendgrid.from_email,
+                  from: process.env.SENDGRID_FROM_EMAIL || '',
                   subject: processedSubject,
                   text: processedMessage,
                   html: processedMessage,
@@ -182,7 +186,7 @@ export const processScheduledMessages = functions.pubsub
               await twilioClient.messages.create({
                 body: `${processedSubject}\n\n${processedMessage}`,
                 to: user.phoneNumber,
-                from: functions.config().twilio.phone_number,
+                from: process.env.TWILIO_PHONE_NUMBER || '',
               });
             } catch (error) {
               console.error('Error sending SMS:', error);
@@ -197,169 +201,175 @@ export const processScheduledMessages = functions.pubsub
         });
       }
     }
-  });
+  }
+);
 
 // Send immediate mass message
-export const sendMassMessage = functions.https.onCall(async (data: MassMessageData, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError(
-      'unauthenticated',
-      'User must be authenticated'
-    );
-  }
+export const sendMassMessage = onCall<MassMessageData>(
+  { 
+    memory: '1GiB',
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError(
+        'unauthenticated',
+        'User must be authenticated'
+      );
+    }
 
-  const {
-    type,
-    subject,
-    message,
-    recipients,
-    recipientGroups,
-    template,
-    variables,
-  } = data;
+    const {
+      type,
+      subject,
+      message,
+      recipients,
+      recipientGroups,
+      template,
+      variables,
+    } = request.data;
 
-  // Verify sender has permission
-  const senderDoc = await admin
-    .firestore()
-    .collection('users')
-    .doc(context.auth.uid)
-    .get();
-
-  const senderData = senderDoc.data() as UserData;
-  if (!senderDoc.exists || !['admin', 'manager'].includes(senderData.role || '')) {
-    throw new functions.https.HttpsError(
-      'permission-denied',
-      'User does not have permission to send mass messages'
-    );
-  }
-
-  // Get all recipients
-  const recipientIds = new Set(recipients || []);
-
-  // Add users from groups if any
-  if (recipientGroups?.length) {
-    const groupUsers = await admin
+    // Verify sender has permission
+    const senderDoc = await admin
       .firestore()
       .collection('users')
-      .where('groups', 'array-contains-any', recipientGroups)
+      .doc(request.auth.uid)
       .get();
 
-    groupUsers.docs.forEach(doc => recipientIds.add(doc.id));
-  }
-
-  // Get user details
-  const userDocs = await Promise.all(
-    Array.from(recipientIds).map(id =>
-      admin.firestore().collection('users').doc(id).get()
-    )
-  );
-
-  const users = userDocs
-    .filter(doc => doc.exists)
-    .map(doc => ({ id: doc.id, ...doc.data() })) as UserData[];
-
-  // Send messages
-  const results = await Promise.allSettled(
-    users.flatMap(user => {
-      const promises = [];
-
-      // Process variables
-      let processedMessage = message;
-      let processedSubject = subject;
-
-      if (variables) {
-        const userData = {
-          name: user.name,
-          email: user.email,
-          ...variables,
-        };
-
-        for (const [key, value] of Object.entries(userData)) {
-          const regex = new RegExp(`{${key}}`, 'g');
-          processedMessage = processedMessage.replace(regex, value);
-          processedSubject = processedSubject.replace(regex, value);
-        }
-      }
-
-      // Create in-app notification
-      promises.push(
-        admin.firestore().collection('notifications').add({
-          userId: user.id,
-          type: 'message',
-          title: processedSubject,
-          message: processedMessage,
-          read: false,
-          timestamp: admin.firestore.FieldValue.serverTimestamp(),
-        })
+    const senderData = senderDoc.data() as UserData;
+    if (!senderDoc.exists || !['admin', 'manager'].includes(senderData.role || '')) {
+      throw new HttpsError(
+        'permission-denied',
+        'User does not have permission to send mass messages'
       );
+    }
 
-      // Send email if enabled
-      if ((type === 'email' || type === 'both') && 
-          user.notificationPreferences.email) {
-        if (template) {
-          promises.push(
-            sgMail.send({
-              to: user.email,
-              from: functions.config().sendgrid.from_email,
-              subject: processedSubject,
-              templateId: template,
-              dynamicTemplateData: {
-                subject: processedSubject,
-                message: processedMessage,
-                userName: user.name,
-              },
-            })
-          );
-        } else {
-          promises.push(
-            sgMail.send({
-              to: user.email,
-              from: functions.config().sendgrid.from_email,
-              subject: processedSubject,
-              text: processedMessage,
-              html: processedMessage,
-            })
-          );
+    // Get all recipients
+    const recipientIds = new Set(recipients || []);
+
+    // Add users from groups if any
+    if (recipientGroups?.length) {
+      const groupUsers = await admin
+        .firestore()
+        .collection('users')
+        .where('groups', 'array-contains-any', recipientGroups)
+        .get();
+
+      groupUsers.docs.forEach(doc => recipientIds.add(doc.id));
+    }
+
+    // Get user details
+    const userDocs = await Promise.all(
+      Array.from(recipientIds).map(id =>
+        admin.firestore().collection('users').doc(id).get()
+      )
+    );
+
+    const users = userDocs
+      .filter(doc => doc.exists)
+      .map(doc => ({ id: doc.id, ...doc.data() })) as UserData[];
+
+    // Send messages
+    const results = await Promise.allSettled(
+      users.flatMap(user => {
+        const promises = [];
+
+        // Process variables
+        let processedMessage = message;
+        let processedSubject = subject;
+
+        if (variables) {
+          const userData = {
+            name: user.name,
+            email: user.email,
+            ...variables,
+          };
+
+          for (const [key, value] of Object.entries(userData)) {
+            const regex = new RegExp(`{${key}}`, 'g');
+            processedMessage = processedMessage.replace(regex, value);
+            processedSubject = processedSubject.replace(regex, value);
+          }
         }
-      }
 
-      // Send SMS if enabled
-      if ((type === 'sms' || type === 'both') && 
-          user.notificationPreferences.sms && 
-          user.phoneNumber) {
+        // Create in-app notification
         promises.push(
-          twilioClient.messages.create({
-            body: `${processedSubject}\n\n${processedMessage}`,
-            to: user.phoneNumber,
-            from: functions.config().twilio.phone_number,
+          admin.firestore().collection('notifications').add({
+            userId: user.id,
+            type: 'message',
+            title: processedSubject,
+            message: processedMessage,
+            read: false,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
           })
         );
-      }
 
-      return promises;
-    })
-  );
+        // Send email if enabled
+        if ((type === 'email' || type === 'both') && 
+            user.notificationPreferences.email) {
+          if (template) {
+            promises.push(
+              sgMail.send({
+                to: user.email,
+                from: process.env.SENDGRID_FROM_EMAIL || '',
+                subject: processedSubject,
+                templateId: template,
+                dynamicTemplateData: {
+                  subject: processedSubject,
+                  message: processedMessage,
+                  userName: user.name,
+                },
+              })
+            );
+          } else {
+            promises.push(
+              sgMail.send({
+                to: user.email,
+                from: process.env.SENDGRID_FROM_EMAIL || '',
+                subject: processedSubject,
+                text: processedMessage,
+                html: processedMessage,
+              })
+            );
+          }
+        }
 
-  // Create audit log
-  await admin.firestore().collection('auditLogs').add({
-    type: 'mass_message',
-    sender: context.auth.uid,
-    messageType: type,
-    recipientCount: users.length,
-    timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    subject,
-    template,
-  });
+        // Send SMS if enabled
+        if ((type === 'sms' || type === 'both') && 
+            user.notificationPreferences.sms && 
+            user.phoneNumber) {
+          promises.push(
+            twilioClient.messages.create({
+              body: `${processedSubject}\n\n${processedMessage}`,
+              to: user.phoneNumber,
+              from: process.env.TWILIO_PHONE_NUMBER || '',
+            })
+          );
+        }
 
-  const successful = results.filter(r => r.status === 'fulfilled').length;
-  const failed = results.filter(r => r.status === 'rejected').length;
+        return promises;
+      })
+    );
 
-  return {
-    success: true,
-    stats: {
-      total: results.length,
-      successful,
-      failed,
-    },
-  };
-});
+    // Create audit log
+    await admin.firestore().collection('auditLogs').add({
+      type: 'mass_message',
+      sender: request.auth.uid,
+      messageType: type,
+      recipientCount: users.length,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      subject,
+      template,
+    });
+
+    const successful = results.filter(r => r.status === 'fulfilled').length;
+    const failed = results.filter(r => r.status === 'rejected').length;
+
+    return {
+      success: true,
+      stats: {
+        total: results.length,
+        successful,
+        failed,
+      },
+    };
+  }
+);

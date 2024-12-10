@@ -1,4 +1,4 @@
-import * as functions from 'firebase-functions';
+import { onDocumentWritten, onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import * as admin from 'firebase-admin';
 import { toDate } from './utils';
 
@@ -17,11 +17,11 @@ interface UserData {
 }
 
 // Process training milestones when a new user is created or updated
-export const processTrainingMilestones = functions.firestore
-  .document('users/{userId}')
-  .onWrite(async (change, context) => {
-    const newData = change.after.data() as UserData;
-    const previousData = change.before.data() as UserData;
+export const processTrainingMilestones = onDocumentWritten(
+  'users/{userId}',
+  async (event) => {
+    const newData = event.data?.after?.data() as UserData | undefined;
+    const previousData = event.data?.before?.data() as UserData | undefined;
 
     // Only process if this is a new user or startDate has changed
     if (!newData?.startDate || 
@@ -30,7 +30,7 @@ export const processTrainingMilestones = functions.firestore
       return;
     }
 
-    const userId = context.params.userId;
+    const userId = event.params.userId;
     const startDate = toDate(newData.startDate);
     const now = new Date();
 
@@ -126,14 +126,17 @@ export const processTrainingMilestones = functions.firestore
 
     // Commit all changes
     await batch.commit();
-  });
+  }
+);
 
 // Update training progress when supervision is completed
-export const updateTrainingProgress = functions.firestore
-  .document('supervisions/{supervisionId}')
-  .onUpdate(async (change, context) => {
-    const newData = change.after.data();
-    const previousData = change.before.data();
+export const updateTrainingProgress = onDocumentUpdated(
+  'supervisions/{supervisionId}',
+  async (event) => {
+    const newData = event.data?.after.data();
+    const previousData = event.data?.before.data();
+
+    if (!newData || !previousData) return;
 
     // Only process if supervision was just completed
     if (newData.status === 'completed' && previousData.status !== 'completed' && newData.milestone) {
@@ -155,4 +158,5 @@ export const updateTrainingProgress = functions.firestore
         });
       }
     }
-  });
+  }
+);
