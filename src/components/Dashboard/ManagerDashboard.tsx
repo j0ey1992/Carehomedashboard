@@ -1,3 +1,5 @@
+// src/components/Dashboard/ManagerDashboard.tsx
+
 import React, { useMemo, useState, useEffect } from 'react';
 import {
   Box,
@@ -17,10 +19,13 @@ import {
   Tooltip,
   LinearProgress,
   Fade,
-  Zoom,
   Divider,
   Switch,
   Paper,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
 } from '@mui/material';
 import {
   Group as StaffIcon,
@@ -34,7 +39,6 @@ import {
   ArrowForward as ArrowIcon,
   LocationOn as SiteIcon,
   EventAvailable as LeaveIcon,
-  FilterList as FilterIcon,
   HelpOutline as HelpIcon,
   PlayCircleOutline as QuickActionIcon,
   Celebration as CelebrationIcon,
@@ -48,8 +52,9 @@ import { useUsers } from '../../contexts/UserContext';
 import { useLeave } from '../../contexts/LeaveContext';
 import { useGamification } from '../../contexts/GamificationContext'; 
 import { alpha, useTheme } from '@mui/material/styles';
-import { format } from 'date-fns';
+import { format, isAfter, isBefore, startOfDay, addDays } from 'date-fns';
 import LeaderboardSection from '../Dashboard/LeaderboardSection';
+import { TrainingRecord, Task } from '../../types';
 
 type ColorType = 'primary' | 'secondary' | 'error' | 'warning' | 'info' | 'success';
 
@@ -64,8 +69,24 @@ interface DashboardItem {
     color: ColorType;
   }[];
   onClick: () => void;
-  // We'll add a field to help determine if it's actionable
   actionableCounts?: number[];
+}
+
+interface SiteStats {
+  totalStaff: number;
+  expiredCount: number;
+  expiringCount: number;
+  completionRate: number;
+  trainingRates: {
+    online: number;
+    f2f: number;
+    compliance: number;
+  };
+  currentSicknessCount: number;
+  reviewCount: number;
+  triggerCount: number;
+  sicknessTasks: Task[];
+  pendingLeaveCount: number;
 }
 
 const ManagerDashboard: React.FC = () => {
@@ -77,27 +98,108 @@ const ManagerDashboard: React.FC = () => {
   const { tasks } = useTask();
   const { users } = useUsers();
   const { leaveRequests } = useLeave();
-  const { userStats } = useGamification(); // Get gamification stats (points, rank, achievements)
+  const { userStats } = useGamification();
 
-  const [selectedSite, setSelectedSite] = useState<string>('');
+  // Get manager's sites from userData
+  const managerSites = userData?.sites || [];
+  
+  const [selectedSite, setSelectedSite] = useState<string>(managerSites[0] || '');
   const [focusMode, setFocusMode] = useState<boolean>(false);
 
+  // Update selectedSite when userData changes
   useEffect(() => {
-    if (userData?.site) {
-      setSelectedSite(userData.site);
+    if (managerSites.length > 0 && !selectedSite) {
+      setSelectedSite(managerSites[0]);
     }
-  }, [userData]);
+  }, [managerSites, selectedSite]);
 
-  const siteStats = useMemo(() => {
+  // ADHD-friendly styles
+  const adhd = {
+    card: {
+      transition: 'transform 0.3s ease',
+      '&:hover': {
+        transform: 'translateY(-4px)',
+        boxShadow: 6
+      },
+      border: `2px solid ${alpha(theme.palette.primary.main, 0.1)}`,
+    },
+    focusHighlight: {
+      '&:focus-within': {
+        outline: `3px solid ${theme.palette.primary.main}`,
+        outlineOffset: '2px'
+      }
+    },
+    largeText: {
+      fontSize: '1.1rem',
+      lineHeight: 1.6
+    },
+    importantText: {
+      fontWeight: 600
+    }
+  };
+
+  // Site statistics calculation
+  const siteStats = useMemo<SiteStats | null>(() => {
     if (!selectedSite) return null;
 
     const siteRecords = trainingRecords.filter(record => record.siteId === selectedSite);
     const totalStaff = new Set(siteRecords.map(record => record.staffId)).size;
-    const expiredCount = siteRecords.filter(record => record.status === 'expired').length;
-    const expiringCount = siteRecords.filter(record => record.status === 'expiring').length;
-    const completionRate = totalStaff > 0 
-      ? ((totalStaff - (expiredCount + expiringCount)) / totalStaff) * 100
-      : 100;
+    const today = startOfDay(new Date());
+    const thirtyDaysFromNow = addDays(today, 30);
+
+    // Separate records by type and apply weights
+    const recordsByType = siteRecords.reduce((acc, record) => {
+      const type = record.recordType;
+      if (!acc[type]) acc[type] = [];
+      acc[type].push(record);
+      return acc;
+    }, {} as Record<string, typeof siteRecords>);
+
+    // Weight definitions for different training categories
+    const weights = {
+      mandatory: 1.5, // Higher weight for mandatory training
+      compliance: 1.2, // Important but not as critical as mandatory
+      optional: 0.8, // Lower weight for optional training
+    };
+
+    // Calculate weighted completion rates
+    const calculateWeightedRate = (records: typeof siteRecords) => {
+      if (!records.length) return 100;
+
+      let weightedSum = 0;
+      let weightedTotal = 0;
+
+      records.forEach((record) => {
+        const weight = weights[record.statsCategory as keyof typeof weights] || 1;
+        const isValid = record.expiryDate && isAfter(new Date(record.expiryDate), today);
+
+        weightedTotal += weight;
+        if (isValid) weightedSum += weight;
+      });
+
+      return (weightedSum / weightedTotal) * 100;
+    };
+
+    // Calculate rates for each type
+    const trainingRates = {
+      online: calculateWeightedRate(recordsByType.training || []),
+      f2f: calculateWeightedRate(recordsByType.f2f || []),
+      compliance: calculateWeightedRate(recordsByType.compliance || []),
+    };
+
+    // Overall weighted rate (40% training, 40% F2F, 20% compliance)
+    const overallRate =
+      trainingRates.online * 0.4 + trainingRates.f2f * 0.4 + trainingRates.compliance * 0.2;
+
+    const expiredCount = siteRecords.filter(record => 
+      record.expiryDate && isBefore(new Date(record.expiryDate), today)
+    ).length;
+
+    const expiringCount = siteRecords.filter(record =>
+      record.expiryDate && 
+      isAfter(new Date(record.expiryDate), today) &&
+      isBefore(new Date(record.expiryDate), thirtyDaysFromNow)
+    ).length;
 
     const siteSicknessRecords = sicknessRecords.filter(record => record.site === selectedSite);
     const currentSickness = siteSicknessRecords.filter(record => record.status === 'current');
@@ -117,13 +219,18 @@ const ManagerDashboard: React.FC = () => {
       task.site === selectedSite && 
       task.category === 'sickness' &&
       task.status !== 'completed'
-    );
+    ) as Task[];
 
     return {
       totalStaff,
       expiredCount,
       expiringCount,
-      completionRate: Math.round(completionRate),
+      completionRate: Math.round(overallRate),
+      trainingRates: {
+        online: Math.round(trainingRates.online),
+        f2f: Math.round(trainingRates.f2f),
+        compliance: Math.round(trainingRates.compliance)
+      },
       currentSicknessCount: currentSickness.length,
       reviewCount: needingReview.length,
       triggerCount: staffWithTriggers.length,
@@ -132,6 +239,7 @@ const ManagerDashboard: React.FC = () => {
     };
   }, [trainingRecords, selectedSite, sicknessRecords, users, getTriggerStatus, tasks, leaveRequests]);
 
+  // Recent tasks calculation
   const recentTasks = useMemo(() => {
     if (!siteStats?.sicknessTasks) return [];
     return siteStats.sicknessTasks
@@ -139,6 +247,7 @@ const ManagerDashboard: React.FC = () => {
       .slice(0, 5);
   }, [siteStats]);
 
+  // Quick actions definition
   const quickActions = [
     {
       label: 'Add Training',
@@ -157,8 +266,8 @@ const ManagerDashboard: React.FC = () => {
     },
   ];
 
-  // Dashboard items now have actionableCounts array to help determine if they should be shown in focus mode
-  const dashboardItems: DashboardItem[] = [
+  // Dashboard items definition wrapped in useMemo to fix dependency warning
+  const dashboardItems = useMemo<DashboardItem[]>(() => [
     {
       title: 'Leave Requests',
       icon: <LeaveIcon sx={{ fontSize: 40 }} />,
@@ -198,7 +307,6 @@ const ManagerDashboard: React.FC = () => {
       color: 'primary',
       onClick: () => navigate('/users'),
       actionableCounts: [siteStats?.totalStaff || 0], 
-      // Assuming staff management is always somewhat actionable if there's staff
     },
     {
       title: 'Training Overview',
@@ -240,12 +348,10 @@ const ManagerDashboard: React.FC = () => {
       color: 'warning',
       onClick: () => navigate('/rota'),
       actionableCounts: [], 
-      // Rota might not have a count, but let's leave it. If we consider no action means we can always view schedule?
-      // If we strictly hide non-action items in focus mode, leave no actionable items means hide in focus mode
     },
-  ];
+  ], [siteStats, navigate]);
 
-  // Filter dashboard items in focus mode: only show items with any actionableCounts > 0
+  // Filter dashboard items for focus mode
   const visibleDashboardItems = useMemo(() => {
     if (!focusMode) return dashboardItems;
     return dashboardItems.filter(item => 
@@ -254,291 +360,454 @@ const ManagerDashboard: React.FC = () => {
   }, [focusMode, dashboardItems]);
 
   return (
-    <Box sx={{ p: 3, maxWidth: 1200, mx: 'auto', fontSize: '1rem' }}>
-      {/* Top Controls: Focus Mode and Help */}
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2, gap: 3 }}>
-        <Stack direction="row" alignItems="center" spacing={1}>
-          <Typography variant="body2">Focus Mode</Typography>
-          <Switch checked={focusMode} onChange={() => setFocusMode(!focusMode)} />
-        </Stack>
-        <Tooltip title="Need help?">
-          <IconButton onClick={() => navigate('/help')}>
-            <HelpIcon />
-          </IconButton>
-        </Tooltip>
-      </Box>
-
-      {/* Welcome & Training Completion Section */}
-      <Fade in timeout={800}>
-        <Paper 
-          elevation={0}
+    <Box sx={{ p: 3, maxWidth: 1200, mx: 'auto', fontSize: '1.1rem', lineHeight: 1.6 }}>
+      {/* Top Controls: Site Selector, Focus Mode, and Help */}
+      <Box sx={{ 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center',
+        mb: 2, 
+        gap: 3,
+        p: 2,
+        bgcolor: alpha(theme.palette.background.paper, 0.8),
+        borderRadius: 2,
+        ...adhd.focusHighlight
+      }}>
+        {/* Site Selector */}
+        <FormControl 
           sx={{ 
-            p: 3, 
-            mb: 4, 
-            bgcolor: alpha(theme.palette.primary.main, 0.1),
-            borderRadius: 3,
+            minWidth: 200,
+            '& .MuiOutlinedInput-root': {
+              bgcolor: 'background.paper',
+              '&:hover': {
+                bgcolor: alpha(theme.palette.primary.main, 0.05),
+              },
+            },
           }}
         >
-          <Grid container spacing={3} alignItems="center">
-            <Grid item xs={12} md={8}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
-                <Typography variant="h4" sx={{ fontWeight: 'bold' }}>
-                  Welcome back, {userData?.name?.split(' ')[0]}! 👋
-                </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <SiteIcon />
-                  <Typography variant="subtitle1">
-                    {selectedSite}
-                  </Typography>
-                </Box>
-                <Tooltip title="Filter data">
-                  <IconButton>
-                    <FilterIcon />
-                  </IconButton>
-                </Tooltip>
-              </Box>
-              <Typography variant="subtitle1" gutterBottom>
-                {siteStats && (siteStats.expiredCount + siteStats.expiringCount + siteStats.currentSicknessCount > 0) ? (
-                  `${(siteStats.expiredCount || 0) + (siteStats.expiringCount || 0) + (siteStats.currentSicknessCount || 0)} items need attention`
-                ) : (
-                  'All staff training and sickness metrics look good! 🎉'
-                )}
-              </Typography>
-              <LinearProgress 
-                variant="determinate" 
-                value={siteStats?.completionRate || 0}
-                sx={{ 
-                  mt: 2, 
-                  height: 10, 
-                  borderRadius: 5,
-                  bgcolor: alpha(theme.palette.primary.main, 0.1),
-                  '& .MuiLinearProgress-bar': {
-                    borderRadius: 5,
-                    bgcolor: siteStats?.completionRate === 100 
-                      ? 'success.main'
-                      : (siteStats?.completionRate || 0) >= 80
-                      ? 'primary.main'
-                      : 'warning.main',
-                  },
-                }}
-              />
-            </Grid>
-            <Grid item xs={12} md={4}>
-              <Box sx={{ position: 'relative', p: 2, textAlign: 'center' }}>
-                <Box
-                  sx={{
-                    position: 'relative',
-                    display: 'inline-flex',
-                    borderRadius: '50%',
-                    bgcolor: alpha(theme.palette.common.white, 0.1),
-                    p: 2,
-                  }}
-                >
-                  <Typography
-                    variant="h4"
-                    component="div"
-                    sx={{ fontWeight: 'bold' }}
-                  >
-                    {siteStats?.completionRate || 0}%
-                  </Typography>
-                  {siteStats && siteStats.completionRate >= 90 && (
-                    <CelebrationIcon 
-                      sx={{ 
-                        position: 'absolute',
-                        top: -10,
-                        right: -10,
-                        color: theme.palette.warning.light,
-                        animation: 'bounce 1s infinite',
-                      }} 
-                    />
-                  )}
-                </Box>
-                <Typography variant="body2" sx={{ mt: 1 }}>
-                  Overall Training Completion Rate
-                </Typography>
-              </Box>
-            </Grid>
-          </Grid>
-        </Paper>
-      </Fade>
+          <InputLabel id="site-select-label">Select Site</InputLabel>
+          <Select
+            labelId="site-select-label"
+            value={selectedSite}
+            onChange={(e) => setSelectedSite(e.target.value)}
+            label="Select Site"
+          >
+            {managerSites.map((site) => (
+              <MenuItem key={site} value={site}>{site}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
 
-      {/* Quick Actions at the Top */}
-      <Card sx={{ p: 3, mb: 4, borderRadius: 3 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-          <QuickActionIcon sx={{ mr: 1, color: theme.palette.primary.main }} />
-          <Typography variant="h5" sx={{ flexGrow: 1, fontWeight: 'bold' }}>
-            Quick Actions
-          </Typography>
-        </Box>
-        <Divider sx={{ mb: 2 }} />
-        <Stack spacing={2} direction="row" flexWrap="wrap" gap={2}>
-          {quickActions.map((action, i) => (
-            <Fade in timeout={300} style={{ transitionDelay: `${i * 100}ms` }} key={action.label}>
-              <Button
-                variant="contained"
-                startIcon={action.icon}
-                onClick={() => navigate(action.path)}
-                sx={{
-                  textTransform: 'none',
-                  borderRadius: 3,
-                  bgcolor: theme.palette.primary.main,
-                  fontWeight: 'bold',
-                  '&:hover': {
-                    bgcolor: alpha(theme.palette.primary.main, 0.8),
-                  },
-                }}
-              >
-                {action.label}
-              </Button>
-            </Fade>
-          ))}
+        {/* Focus Mode and Help */}
+        <Stack direction="row" alignItems="center" spacing={2}>
+          <Typography variant="body1" sx={adhd.importantText}>Focus Mode</Typography>
+          <Switch 
+            checked={focusMode} 
+            onChange={() => setFocusMode(!focusMode)}
+            sx={{ transform: 'scale(1.2)' }}
+          />
+          <Tooltip title="Need help?">
+            <IconButton size="large">
+              <HelpIcon />
+            </IconButton>
+          </Tooltip>
         </Stack>
-      </Card>
+      </Box>
 
-      {/* Main Dashboard Sections */}
-      <Grid container spacing={3}>
-        {visibleDashboardItems.map((item, index) => (
-          <Grid item xs={12} sm={6} md={4} key={index}>
-            <Card
-              sx={{
-                height: '100%',
-                cursor: 'pointer',
-                transition: 'all 0.3s ease',
-                '&:hover': {
-                  transform: 'translateY(-4px)',
-                  boxShadow: 4,
-                },
-                bgcolor: alpha(theme.palette[item.color].main, 0.05),
-                borderRadius: 3,
+      {selectedSite ? (
+        <Box>
+          {/* Welcome & Training Status Section */}
+          <Fade in timeout={800}>
+            <Paper 
+              elevation={3}
+              sx={{ 
+                p: 4, 
+                mb: 4, 
+                bgcolor: alpha(theme.palette.primary.main, 0.08),
+                borderRadius: 4,
+                ...adhd.card,
+                ...adhd.focusHighlight
               }}
-              onClick={item.onClick}
             >
-              <CardContent>
-                <Stack spacing={2}>
-                  <Box display="flex" alignItems="center" gap={1}>
-                    <Box sx={{ color: `${item.color}.main` }}>
-                      {item.icon}
+              <Grid container spacing={4} alignItems="center">
+                <Grid item xs={12} md={8}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3, flexWrap: 'wrap' }}>
+                    <Typography 
+                      variant="h4" 
+                      sx={{ 
+                        fontWeight: 'bold',
+                        color: theme.palette.primary.main,
+                        fontSize: '2rem'
+                      }}
+                    >
+                      Welcome back, {userData?.name?.split(' ')[0]}! 👋
+                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <SiteIcon />
+                      <Typography variant="subtitle1" sx={adhd.importantText}>
+                        {selectedSite}
+                      </Typography>
                     </Box>
-                    <Typography variant="h6" sx={{ fontWeight: 'bold' }}>{item.title}</Typography>
                   </Box>
-                  <Typography variant="body1" color="textSecondary">
-                    {item.stats}
+
+                  {/* Training Status Overview */}
+                  <Box sx={{ mb: 3 }}>
+                    <Typography variant="h6" sx={adhd.importantText}>
+                      Training Status
+                    </Typography>
+                    <Grid container spacing={2} sx={{ mt: 1 }}>
+                      <Grid item xs={4}>
+                        <Paper sx={{ p: 2, textAlign: 'center', ...adhd.card }}>
+                          <Typography variant="h6">
+                            {Math.round(siteStats?.trainingRates.online || 0)}%
+                          </Typography>
+                          <Typography variant="body2">Online Training</Typography>
+                        </Paper>
+                      </Grid>
+                      <Grid item xs={4}>
+                        <Paper sx={{ p: 2, textAlign: 'center', ...adhd.card }}>
+                          <Typography variant="h6">
+                            {Math.round(siteStats?.trainingRates.f2f || 0)}%
+                          </Typography>
+                          <Typography variant="body2">F2F Training</Typography>
+                        </Paper>
+                      </Grid>
+                      <Grid item xs={4}>
+                        <Paper sx={{ p: 2, textAlign: 'center', ...adhd.card }}>
+                          <Typography variant="h6">
+                            {Math.round(siteStats?.trainingRates.compliance || 0)}%
+                          </Typography>
+                          <Typography variant="body2">Compliance</Typography>
+                        </Paper>
+                      </Grid>
+                    </Grid>
+                  </Box>
+
+                  {/* Overall Progress */}
+                  <Box sx={{ mt: 3 }}>
+                    <Typography variant="h6" sx={{ mb: 1, ...adhd.importantText }}>
+                      Overall Progress
+                    </Typography>
+                    <LinearProgress 
+                      variant="determinate" 
+                      value={siteStats?.completionRate || 0}
+                      sx={{ 
+                        height: 12, 
+                        borderRadius: 6,
+                        bgcolor: alpha(theme.palette.primary.main, 0.1),
+                        '& .MuiLinearProgress-bar': {
+                          borderRadius: 6,
+                          bgcolor: (siteStats?.completionRate || 0) >= 90 
+                            ? theme.palette.success.main
+                            : (siteStats?.completionRate || 0) >= 75
+                            ? theme.palette.primary.main
+                            : theme.palette.warning.main,
+                        },
+                      }}
+                    />
+                    <Typography 
+                      variant="body1" 
+                      sx={{ 
+                        mt: 1, 
+                        textAlign: 'center',
+                        color: (siteStats?.completionRate || 0) >= 90 
+                          ? theme.palette.success.main
+                          : theme.palette.text.primary,
+                        ...adhd.importantText
+                      }}
+                    >
+                      {siteStats?.completionRate || 0}% Complete
+                    </Typography>
+                  </Box>
+
+                  <Typography variant="subtitle1" sx={{ mt: 2, ...adhd.largeText }}>
+                    {siteStats && (siteStats.expiredCount + siteStats.expiringCount + siteStats.currentSicknessCount > 0) ? (
+                      `${siteStats.expiredCount + siteStats.expiringCount + siteStats.currentSicknessCount} items need attention`
+                    ) : (
+                      'All staff training and sickness metrics look good! 🎉'
+                    )}
                   </Typography>
-                  {item.alerts && (
-                    <Box display="flex" gap={1} flexWrap="wrap">
-                      {item.alerts.map((alert, i) => (
+                </Grid>
+
+                {/* Right Column - Stats Summary */}
+                <Grid item xs={12} md={4}>
+                  <Box sx={{ position: 'relative', p: 2, textAlign: 'center' }}>
+                    <Box
+                      sx={{
+                        position: 'relative',
+                        display: 'inline-flex',
+                        borderRadius: '50%',
+                        bgcolor: alpha(theme.palette.common.white, 0.1),
+                        p: 2,
+                      }}
+                    >
+                      <Typography
+                        variant="h4"
+                        component="div"
+                        sx={{ fontWeight: 'bold' }}
+                      >
+                        {siteStats?.completionRate || 0}%
+                      </Typography>
+                      {siteStats && siteStats.completionRate >= 90 && (
+                        <CelebrationIcon 
+                          sx={{ 
+                            position: 'absolute',
+                            top: -10,
+                            right: -10,
+                            color: theme.palette.warning.light,
+                            animation: 'bounce 1s infinite',
+                          }} 
+                        />
+                      )}
+                    </Box>
+                    <Typography variant="body2" sx={{ mt: 1, ...adhd.largeText }}>
+                      Overall Training Completion Rate
+                    </Typography>
+                  </Box>
+                </Grid>
+              </Grid>
+            </Paper>
+          </Fade>
+
+          {/* Quick Actions */}
+          <Card sx={{ 
+            p: 3, 
+            mb: 4, 
+            borderRadius: 3,
+            ...adhd.card,
+            ...adhd.focusHighlight
+          }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+              <QuickActionIcon sx={{ mr: 1, color: theme.palette.primary.main }} />
+              <Typography variant="h5" sx={{ flexGrow: 1, ...adhd.importantText }}>
+                Quick Actions
+              </Typography>
+            </Box>
+            <Divider sx={{ mb: 2 }} />
+            <Stack spacing={2} direction="row" flexWrap="wrap" gap={2}>
+              {quickActions.map((action, i) => (
+                <Fade in timeout={300} style={{ transitionDelay: `${i * 100}ms` }} key={action.label}>
+                  <Button
+                    variant="contained"
+                    startIcon={action.icon}
+                    onClick={() => navigate(action.path)}
+                    sx={{
+                      textTransform: 'none',
+                      borderRadius: 3,
+                      bgcolor: theme.palette.primary.main,
+                      fontWeight: 'bold',
+                      fontSize: '1rem',
+                      py: 1.5,
+                      px: 3,
+                      '&:hover': {
+                        bgcolor: alpha(theme.palette.primary.main, 0.8),
+                      },
+                    }}
+                  >
+                    {action.label}
+                  </Button>
+                </Fade>
+              ))}
+            </Stack>
+          </Card>
+
+          {/* Main Dashboard Grid */}
+          <Grid container spacing={3}>
+            {visibleDashboardItems.map((item, index) => (
+              <Grid item xs={12} sm={6} md={4} key={index}>
+                <Card
+                  sx={{
+                    height: '100%',
+                    cursor: 'pointer',
+                    bgcolor: alpha(theme.palette[item.color].main, 0.05),
+                    borderRadius: 3,
+                    ...adhd.card,
+                    ...adhd.focusHighlight
+                  }}
+                  onClick={item.onClick}
+                >
+                  <CardContent>
+                    <Stack spacing={2}>
+                      <Box display="flex" alignItems="center" gap={1}>
+                        <Box sx={{ color: `${item.color}.main` }}>
+                          {item.icon}
+                        </Box>
+                        <Typography variant="h6" sx={adhd.importantText}>
+                          {item.title}
+                        </Typography>
+                      </Box>
+                      <Typography variant="body1" sx={adhd.largeText}>
+                        {item.stats}
+                      </Typography>
+                      {item.alerts && (
+                        <Box display="flex" gap={1} flexWrap="wrap">
+                          {item.alerts.map((alert, i) => (
+                            <Chip
+                              key={i}
+                              label={`${alert.count} ${alert.label}`}
+                              color={alert.color}
+                              size="small"
+                              sx={{ fontSize: '0.9rem' }}
+                            />
+                          ))}
+                        </Box>
+                      )}
+                    </Stack>
+                  </CardContent>
+                </Card>
+              </Grid>
+            ))}
+          </Grid>
+
+          {/* Leaderboard Section */}
+          {!focusMode && (
+            <Box sx={{ mt: 3 }}>
+              <LeaderboardSection />
+              {userStats && (
+                <Paper sx={{ 
+                  p: 3, 
+                  mt: 3, 
+                  borderRadius: 3,
+                  ...adhd.card,
+                  ...adhd.focusHighlight
+                }}>
+                  <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 2 }}>
+                    Your Progress
+                  </Typography>
+                  <Typography variant="body1" sx={adhd.largeText}>
+                    Level: {userStats.rank}
+                  </Typography>
+                  <Typography variant="body2" sx={adhd.largeText}>
+                    Points: {userStats.points}
+                  </Typography>
+                  <LinearProgress
+                    variant="determinate"
+                    value={Math.min(userStats.points, 100)}
+                    sx={{
+                      mt: 1,
+                      height: 8,
+                      borderRadius: 4,
+                      bgcolor: alpha(theme.palette.primary.main, 0.1),
+                      '& .MuiLinearProgress-bar': {
+                        borderRadius: 4,
+                        bgcolor: 'info.main',
+                      },
+                    }}
+                  />
+                  {userStats.achievements && userStats.achievements.length > 0 && (
+                    <Box sx={{ mt: 2, display: 'flex', gap: 1, justifyContent: 'center', flexWrap: 'wrap' }}>
+                      {userStats.achievements.slice(0, 3).map((badge) => (
                         <Chip
-                          key={i}
-                          label={`${alert.count} ${alert.label}`}
-                          color={alert.color}
+                          key={badge.id}
+                          label={badge.title}
+                          icon={<CheckCircleIcon />}
+                          color="primary"
                           size="small"
+                          sx={{ fontSize: '0.9rem' }}
                         />
                       ))}
                     </Box>
                   )}
-                </Stack>
+                </Paper>
+              )}
+            </Box>
+          )}
+
+          {/* Recent Tasks Section */}
+          {!focusMode && recentTasks.length > 0 && (
+            <Card sx={{ 
+              mt: 3, 
+              borderRadius: 3,
+              ...adhd.card,
+              ...adhd.focusHighlight
+            }}>
+              <CardContent>
+                <Typography variant="h6" gutterBottom sx={adhd.importantText}>
+                  Recent Sickness Tasks
+                </Typography>
+                <List>
+                  {recentTasks.map((task) => (
+                    <ListItem 
+                      key={task.id}
+                      sx={{
+                        transition: 'all 0.3s ease',
+                        '&:hover': {
+                          bgcolor: alpha(theme.palette.primary.main, 0.05),
+                        },
+                        borderRadius: 2,
+                      }}
+                    >
+                      <ListItemIcon>
+                        {task.priority === 'high' ? (
+                          <WarningIcon color="error" />
+                        ) : task.status === 'completed' ? (
+                          <CheckCircleIcon color="success" />
+                        ) : (
+                          <TaskIcon color="primary" />
+                        )}
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={
+                          <Typography sx={adhd.importantText}>{task.title}</Typography>
+                        }
+                        secondary={
+                          <Typography sx={adhd.largeText}>
+                            Due: {format(task.dueDate, 'PPP')} • Priority: {task.priority}
+                          </Typography>
+                        }
+                      />
+                      <ListItemSecondaryAction>
+                        <Tooltip title="View Details">
+                          <IconButton 
+                            edge="end" 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/tasks/${task.id}`);
+                            }}
+                            sx={{
+                              transition: 'transform 0.3s ease',
+                              '&:hover': {
+                                transform: 'translateX(4px)',
+                              },
+                            }}
+                          >
+                            <ArrowIcon />
+                          </IconButton>
+                        </Tooltip>
+                      </ListItemSecondaryAction>
+                    </ListItem>
+                  ))}
+                </List>
               </CardContent>
             </Card>
-          </Grid>
-        ))}
-      </Grid>
-
-      {/* Leaderboard and Gamification (hide in focus mode) */}
-      {!focusMode && (
-        <Box sx={{ mt: 3 }}>
-          <LeaderboardSection />
-          {userStats && (
-            <Paper sx={{ p: 3, mt: 3, borderRadius: 3 }}>
-              <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 2 }}>
-                Your Progress
-              </Typography>
-              <Typography variant="body1">Level: {userStats.rank}</Typography>
-              <Typography variant="body2">
-                Points: {userStats.points}
-              </Typography>
-              <LinearProgress
-                variant="determinate"
-                value={Math.min(userStats.points, 100)}
-                sx={{
-                  mt: 1,
-                  height: 8,
-                  borderRadius: 4,
-                  bgcolor: alpha(theme.palette.primary.main, 0.1),
-                  '& .MuiLinearProgress-bar': {
-                    borderRadius: 4,
-                    bgcolor: 'info.main',
-                  },
-                }}
-              />
-              {userStats.achievements && userStats.achievements.length > 0 && (
-                <Box sx={{ mt: 2, display: 'flex', gap: 1, justifyContent: 'center', flexWrap: 'wrap' }}>
-                  {userStats.achievements.slice(0, 3).map((badge) => (
-                    <Chip
-                      key={badge.id}
-                      label={badge.title}
-                      icon={<CheckCircleIcon />}
-                      color="primary"
-                      size="small"
-                    />
-                  ))}
-                </Box>
-              )}
-            </Paper>
           )}
+
+          {/* Animation Styles */}
+          <style>
+            {`
+              @keyframes bounce {
+                0%, 100% { transform: translateY(0); }
+                50% { transform: translateY(-10px); }
+              }
+            `}
+          </style>
         </Box>
+      ) : (
+        // Fallback UI when no site is selected
+        <Paper 
+          sx={{ 
+            p: 4, 
+            textAlign: 'center',
+            bgcolor: alpha(theme.palette.primary.main, 0.08),
+            borderRadius: 4,
+            ...adhd.card
+          }}
+        >
+          <Typography variant="h5" sx={adhd.importantText}>
+            Please select a site to view the dashboard.
+          </Typography>
+        </Paper>
       )}
-
-      {/* Recent Sickness Tasks (hidden in focus mode) */}
-      {!focusMode && recentTasks.length > 0 && (
-        <Card sx={{ mt: 3, borderRadius: 3 }}>
-          <CardContent>
-            <Typography variant="h6" gutterBottom sx={{ fontWeight: 'bold' }}>
-              Recent Sickness Tasks
-            </Typography>
-            <List>
-              {recentTasks.map((task) => (
-                <ListItem key={task.id}>
-                  <ListItemIcon>
-                    {task.priority === 'high' ? (
-                      <WarningIcon color="error" />
-                    ) : task.status === 'completed' ? (
-                      <CheckCircleIcon color="success" />
-                    ) : (
-                      <TaskIcon color="primary" />
-                    )}
-                  </ListItemIcon>
-                  <ListItemText
-                    primary={task.title}
-                    secondary={`Due: ${format(task.dueDate, 'PPP')} • Priority: ${task.priority}`}
-                  />
-                  <ListItemSecondaryAction>
-                    <Tooltip title="View Details">
-                      <IconButton 
-                        edge="end" 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/tasks/${task.id}`);
-                        }}
-                      >
-                        <ArrowIcon />
-                      </IconButton>
-                    </Tooltip>
-                  </ListItemSecondaryAction>
-                </ListItem>
-              ))}
-            </List>
-          </CardContent>
-        </Card>
-      )}
-
-      <style>
-        {`
-          @keyframes bounce {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-10px); }
-          }
-        `}
-      </style>
     </Box>
   );
 };

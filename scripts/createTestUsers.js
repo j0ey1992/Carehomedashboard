@@ -28,6 +28,15 @@ const testUsers = [
     roles: ['Manager', 'Care Staff'],
     sites: ['Willowbrook'],
     claims: { manager: true }
+  },
+  {
+    email: 'staff@carehome.com',
+    password: 'Staff123!',
+    displayName: 'Staff User',
+    role: 'staff',
+    roles: ['Care Staff'],
+    sites: ['Willowbrook'],
+    claims: { staff: true }
   }
 ];
 
